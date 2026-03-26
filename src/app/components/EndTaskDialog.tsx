@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, X, Clock } from "lucide-react";
+import { AlertTriangle, X, Clock, Target } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, formatElapsed, formatDuration, getEvalTagInfo } from "../context/AppContext";
 
@@ -130,6 +130,31 @@ export function EndTaskDialog() {
                 共 {formatDuration(taskToEnd.elapsed)}
               </span>
             </div>
+            {/* 预计 vs 实际 */}
+            {taskToEnd.estimatedMinutes && taskToEnd.estimatedMinutes > 0 && (() => {
+              const estSeconds = taskToEnd.estimatedMinutes * 60;
+              const ratio = taskToEnd.elapsed / estSeconds;
+              const delta = taskToEnd.elapsed - estSeconds;
+              const statusColor = ratio <= 1 ? "#10B981" : "#EF4444";
+              const statusText = ratio <= 1
+                ? `提前 ${formatDuration(Math.abs(delta))} 完成`
+                : `超时 ${formatDuration(Math.abs(delta))}`;
+              return (
+                <div
+                  className="flex items-center gap-2 mt-3 px-3 py-2 rounded-lg"
+                  style={{ background: `${statusColor}12`, border: `1px solid ${statusColor}33` }}
+                >
+                  <Target size={14} style={{ color: statusColor }} />
+                  <span style={{ fontSize: 12, color: "#8B8FA8" }}>
+                    预计 {formatDuration(estSeconds)}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#525675" }}>→</span>
+                  <span style={{ fontSize: 12, color: statusColor, fontWeight: 600 }}>
+                    {statusText}
+                  </span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* 完成感受 */}

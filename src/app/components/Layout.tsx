@@ -10,6 +10,7 @@ import {
   Bell,
   Settings,
   Layers,
+  Download,
 } from "lucide-react";
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
@@ -45,6 +46,7 @@ export function Layout() {
     setTaskToEnd,
     showFloatingWidget,
     setShowFloatingWidget,
+    exportToCSV,
   } = useApp();
 
   const runningCount = tasks.filter((t) => t.isRunning).length;
@@ -155,6 +157,20 @@ export function Layout() {
             >
               <Settings size={17} />
               {!collapsed && <span style={{ fontSize: 14 }}>设置</span>}
+            </button>
+            <button
+              onClick={exportToCSV}
+              className="flex items-center gap-3 rounded-lg py-2.5 transition-colors"
+              style={{
+                paddingLeft: collapsed ? 8 : 12,
+                paddingRight: collapsed ? 8 : 12,
+                justifyContent: collapsed ? "center" : "flex-start",
+                color: "#10B981",
+              }}
+              title={collapsed ? "导出 CSV" : undefined}
+            >
+              <Download size={17} />
+              {!collapsed && <span style={{ fontSize: 14 }}>导出 CSV</span>}
             </button>
           </div>
         </div>

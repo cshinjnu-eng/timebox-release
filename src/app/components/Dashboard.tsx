@@ -11,6 +11,7 @@ import {
   ChevronDown,
   MoreHorizontal,
   GripVertical,
+  Target,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -117,6 +118,36 @@ function TimerCard({ task }: { task: Task }) {
             <MoreHorizontal size={16} />
           </button>
         </div>
+
+        {/* Estimated vs actual */}
+        {task.estimatedMinutes && task.estimatedMinutes > 0 && (() => {
+          const estSeconds = task.estimatedMinutes * 60;
+          const ratio = task.elapsed / estSeconds;
+          const statusColor = ratio < 0.75 ? "#10B981" : ratio < 1 ? "#F59E0B" : "#EF4444";
+          const estLabel = task.estimatedMinutes >= 60
+            ? `${Math.floor(task.estimatedMinutes / 60)}h${task.estimatedMinutes % 60 > 0 ? `${task.estimatedMinutes % 60}m` : ""}`
+            : `${task.estimatedMinutes}m`;
+          return (
+            <div className="flex items-center gap-2 mt-1 mb-1">
+              <Target size={12} style={{ color: "#06B6D4", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: "#8B8FA8" }}>预计 {estLabel}</span>
+              <div className="flex-1 rounded-full" style={{ height: 3, background: "#252836" }}>
+                <div
+                  className="rounded-full"
+                  style={{
+                    height: "100%",
+                    width: `${Math.min(ratio * 100, 100)}%`,
+                    background: statusColor,
+                    transition: "width 1s linear, background 0.3s",
+                  }}
+                />
+              </div>
+              <span style={{ fontSize: 10, color: statusColor, fontWeight: 600, minWidth: 32, textAlign: "right" }}>
+                {Math.round(ratio * 100)}%
+              </span>
+            </div>
+          );
+        })()}
 
         {/* Timer */}
         <div className="flex items-center justify-between mt-3">

@@ -17,6 +17,8 @@ import {
   Calendar,
   ChevronDown,
   Search,
+  Download,
+  Target,
 } from "lucide-react";
 import { useApp, formatDuration, getCategoryInfo, getEvalTagInfo, CATEGORIES, WorkSession } from "../context/AppContext";
 
@@ -87,7 +89,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export function Worklog() {
-  const { sessions } = useApp();
+  const { sessions, exportToCSV } = useApp();
   const [dateFilter, setDateFilter] = useState("今天");
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("全部");
@@ -176,7 +178,24 @@ export function Worklog() {
           </p>
         </div>
 
-        {/* Date filter */}
+        <div className="flex items-center gap-3">
+          {/* CSV Export */}
+          <button
+            onClick={exportToCSV}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors"
+            style={{
+              background: "rgba(16,185,129,0.12)",
+              color: "#10B981",
+              fontSize: 13,
+              fontWeight: 600,
+              border: "1px solid rgba(16,185,129,0.2)",
+            }}
+          >
+            <Download size={14} />
+            导出 CSV
+          </button>
+
+          {/* Date filter */}
         <div
           className="flex gap-1 p-1 rounded-lg"
           style={{ background: "#161820", border: "1px solid #252836" }}
@@ -195,6 +214,7 @@ export function Worklog() {
               {f}
             </button>
           ))}
+          </div>
         </div>
       </div>
 
@@ -383,6 +403,18 @@ export function Worklog() {
                               >
                                 {formatDuration(session.duration)}
                               </p>
+                              {session.estimatedMinutes && session.estimatedMinutes > 0 && (() => {
+                                const estSec = session.estimatedMinutes * 60;
+                                const over = session.duration > estSec;
+                                return (
+                                  <div className="flex items-center gap-1 mt-0.5 justify-end">
+                                    <Target size={10} style={{ color: over ? "#EF4444" : "#10B981" }} />
+                                    <span style={{ fontSize: 10, color: over ? "#EF4444" : "#10B981" }}>
+                                      预计 {session.estimatedMinutes}m
+                                    </span>
+                                  </div>
+                                );
+                              })()}
                             </div>
                             <span
                               className="px-2 py-1 rounded-md text-xs font-medium"

@@ -11,6 +11,7 @@ export function NewTaskDialog() {
   const [evalTag, setEvalTag] = useState<string>("必须/有意义");
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [estimatedMinutes, setEstimatedMinutes] = useState<number | undefined>(undefined);
   const [error, setError] = useState("");
 
   function addTag() {
@@ -30,7 +31,14 @@ export function NewTaskDialog() {
       setError("请输入任务名称");
       return;
     }
-    addTask({ name: name.trim(), description: description.trim(), category, evalTag, tags });
+    addTask({
+      name: name.trim(),
+      description: description.trim(),
+      category,
+      evalTag,
+      tags,
+      estimatedMinutes: estimatedMinutes && estimatedMinutes > 0 ? estimatedMinutes : undefined,
+    });
     setShowNewTaskDialog(false);
   }
 
@@ -125,6 +133,52 @@ export function NewTaskDialog() {
               onFocus={(e) => (e.target.style.borderColor = "#4F7FFF")}
               onBlur={(e) => (e.target.style.borderColor = "#252836")}
             />
+          </div>
+
+          {/* 预计时间 */}
+          <div>
+            <label style={{ fontSize: 13, color: "#8B8FA8", display: "block", marginBottom: 6 }}>
+              预计时间（分钟）
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={estimatedMinutes ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setEstimatedMinutes(v ? parseInt(v, 10) : undefined);
+                }}
+                placeholder="输入预计时间..."
+                className="w-24 rounded-lg px-3 py-2.5 outline-none transition-colors"
+                style={{
+                  background: "#0B0D14",
+                  border: "1px solid #252836",
+                  color: "#E8EAF0",
+                  fontSize: 14,
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#4F7FFF")}
+                onBlur={(e) => (e.target.style.borderColor = "#252836")}
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {[15, 30, 45, 60, 90, 120].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setEstimatedMinutes(m)}
+                    className="px-2 py-1 rounded-md transition-all text-xs"
+                    style={{
+                      background: estimatedMinutes === m ? "rgba(79,127,255,0.15)" : "#1A1D29",
+                      border: `1px solid ${estimatedMinutes === m ? "#4F7FFF" : "#252836"}`,
+                      color: estimatedMinutes === m ? "#4F7FFF" : "#8B8FA8",
+                      fontWeight: estimatedMinutes === m ? 600 : 400,
+                    }}
+                  >
+                    {m >= 60 ? `${m / 60}h` : `${m}m`}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* 定性标签 */}
@@ -253,6 +307,14 @@ export function NewTaskDialog() {
             >
               {selectedEval.label}
             </span>
+            {estimatedMinutes && estimatedMinutes > 0 && (
+              <span
+                className="px-2 py-0.5 rounded-md"
+                style={{ background: "rgba(6,182,212,0.12)", color: "#06B6D4", fontSize: 12 }}
+              >
+                ≈{estimatedMinutes >= 60 ? `${Math.floor(estimatedMinutes / 60)}h${estimatedMinutes % 60 > 0 ? `${estimatedMinutes % 60}m` : ""}` : `${estimatedMinutes}m`}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button

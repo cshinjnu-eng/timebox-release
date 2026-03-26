@@ -6,6 +6,14 @@ import React, {
   useCallback,
   useRef,
 } from "react";
+import {
+  ensureDefaultBuckets,
+  saveEvent,
+  deleteEvent,
+  getEventsByBucket,
+  type EventRecord,
+} from "../services/db";
+import { downloadCSV } from "../services/exportCSV";
 
 // ─── 定性标签（五选一） ────────────────────────────────────────────────
 export const CATEGORIES = [
@@ -45,6 +53,7 @@ export interface Task {
   elapsed: number;         // seconds
   isRunning: boolean;
   tags: string[];          // 自定义标签
+  estimatedMinutes?: number; // 预计时间（分钟）
 }
 
 export interface TodoItem {
@@ -66,6 +75,7 @@ export interface WorkSession {
   duration: number;        // seconds
   feeling?: string;        // 完成感受
   tags: string[];          // 自定义标签
+  estimatedMinutes?: number; // 预计时间（分钟）
 }
 
 interface AppContextType {
@@ -78,8 +88,10 @@ interface AppContextType {
     category: string;
     evalTag?: string;
     tags: string[];
+    estimatedMinutes?: number;
   }) => void;
   endTask: (id: string, feeling?: string) => void;
+  exportToCSV: () => void;
   toggleTimer: (id: string) => void;
   toggleTodo: (id: string) => void;
   addTodo: (text: string, category: string, priority: "high" | "medium" | "low") => void;
@@ -249,6 +261,107 @@ const INITIAL_TODOS: TodoItem[] = [
   { id: makeId(), text: "回复积压邮件", completed: false, priority: "low", category: "琐事" },
 ];
 
+// ─── IndexedDB 序列化辅助 ─────────────────────────────────────────
+function taskToEvent(task: Task): EventRecord {
+  return {
+    id: task.id,
+    bucketId: "timebox-tasks",
+    timestamp: task.startTime.toISOString(),
+    duration: task.elapsed,
+    data: {
+      name: task.name,
+      description: task.description,
+      category: task.category,
+      evalTag: task.evalTag,
+      color: task.color,
+      bgColor: task.bgColor,
+      isRunning: task.isRunning,
+      tags: task.tags,
+      estimatedMinutes: task.estimatedMinutes,
+    },
+  };
+}
+
+function eventToTask(e: EventRecord): Task {
+  const d = e.data as Record<string, any>;
+  return {
+    id: e.id,
+    name: d.name || "",
+    description: d.description,
+    category: d.category || "工作",
+    evalTag: d.evalTag,
+    color: d.color || "#4F7FFF",
+    bgColor: d.bgColor || "rgba(79,127,255,0.15)",
+    startTime: new Date(e.timestamp),
+    elapsed: e.duration,
+    isRunning: d.isRunning ?? false,
+    tags: d.tags || [],
+    estimatedMinutes: d.estimatedMinutes,
+  };
+}
+
+function sessionToEvent(s: WorkSession): EventRecord {
+  return {
+    id: s.id,
+    bucketId: "timebox-sessions",
+    timestamp: s.startTime.toISOString(),
+    duration: s.duration,
+    data: {
+      taskName: s.taskName,
+      category: s.category,
+      evalTag: s.evalTag,
+      color: s.color,
+      endTime: s.endTime.toISOString(),
+      feeling: s.feeling,
+      tags: s.tags,
+      estimatedMinutes: s.estimatedMinutes,
+    },
+  };
+}
+
+function eventToSession(e: EventRecord): WorkSession {
+  const d = e.data as Record<string, any>;
+  return {
+    id: e.id,
+    taskName: d.taskName || "",
+    category: d.category || "工作",
+    evalTag: d.evalTag,
+    color: d.color || "#4F7FFF",
+    startTime: new Date(e.timestamp),
+    endTime: new Date(d.endTime),
+    duration: e.duration,
+    feeling: d.feeling,
+    tags: d.tags || [],
+    estimatedMinutes: d.estimatedMinutes,
+  };
+}
+
+function todoToEvent(t: TodoItem): EventRecord {
+  return {
+    id: t.id,
+    bucketId: "timebox-todos",
+    timestamp: new Date().toISOString(),
+    duration: 0,
+    data: {
+      text: t.text,
+      completed: t.completed,
+      priority: t.priority,
+      category: t.category,
+    },
+  };
+}
+
+function eventToTodo(e: EventRecord): TodoItem {
+  const d = e.data as Record<string, any>;
+  return {
+    id: e.id,
+    text: d.text || "",
+    completed: d.completed ?? false,
+    priority: d.priority || "medium",
+    category: d.category || "工作",
+  };
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [todos, setTodos] = useState<TodoItem[]>(INITIAL_TODOS);
@@ -257,8 +370,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [showEndTaskDialog, setShowEndTaskDialog] = useState(false);
   const [taskToEnd, setTaskToEnd] = useState<Task | null>(null);
   const [showFloatingWidget, setShowFloatingWidget] = useState(true);
+  const [dbReady, setDbReady] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ─── IndexedDB 初始化：加载数据 ──────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        await ensureDefaultBuckets();
+        const [taskEvents, todoEvents, sessionEvents] = await Promise.all([
+          getEventsByBucket("timebox-tasks"),
+          getEventsByBucket("timebox-todos"),
+          getEventsByBucket("timebox-sessions"),
+        ]);
+        if (taskEvents.length > 0) setTasks(taskEvents.map(eventToTask));
+        if (todoEvents.length > 0) setTodos(todoEvents.map(eventToTodo));
+        if (sessionEvents.length > 0) setSessions(sessionEvents.map(eventToSession));
+      } catch (err) {
+        console.warn("IndexedDB 加载失败，使用默认数据", err);
+      } finally {
+        setDbReady(true);
+      }
+    })();
+  }, []);
+
+  // ─── 持久化同步 ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!dbReady) return;
+    // 每 10s 持久化一次 tasks（含 elapsed 更新）
+    const syncInterval = setInterval(() => {
+      tasks.forEach((t) => saveEvent(taskToEvent(t)).catch(console.warn));
+    }, 10000);
+    return () => clearInterval(syncInterval);
+  }, [dbReady, tasks]);
 
   useEffect(() => {
     intervalRef.current = setInterval(() => {
@@ -278,6 +423,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       category: string;
       evalTag?: string;
       tags: string[];
+      estimatedMinutes?: number;
     }) => {
       const cat = getCategoryInfo(data.category);
       const newTask: Task = {
@@ -292,8 +438,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         elapsed: 0,
         isRunning: true,
         tags: data.tags,
+        estimatedMinutes: data.estimatedMinutes,
       };
       setTasks((prev) => [...prev, newTask]);
+      saveEvent(taskToEvent(newTask)).catch(console.warn);
     },
     []
   );
@@ -313,8 +461,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           duration: task.elapsed,
           feeling,
           tags: task.tags,
+          estimatedMinutes: task.estimatedMinutes,
         };
         setSessions((s) => [session, ...s]);
+        saveEvent(sessionToEvent(session)).catch(console.warn);
+        deleteEvent(task.id).catch(console.warn); // 从 tasks bucket 移除
       }
       return prev.filter((t) => t.id !== id);
     });
@@ -327,20 +478,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toggleTodo = useCallback((id: string) => {
-    setTodos((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
-    );
+    setTodos((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id === id) {
+          const toggled = { ...t, completed: !t.completed };
+          saveEvent(todoToEvent(toggled)).catch(console.warn);
+          return toggled;
+        }
+        return t;
+      });
+      return updated;
+    });
   }, []);
 
   const addTodo = useCallback(
     (text: string, category: string, priority: "high" | "medium" | "low") => {
-      setTodos((prev) => [
-        ...prev,
-        { id: makeId(), text, completed: false, priority, category },
-      ]);
+      const newTodo: TodoItem = { id: makeId(), text, completed: false, priority, category };
+      setTodos((prev) => [...prev, newTodo]);
+      saveEvent(todoToEvent(newTodo)).catch(console.warn);
     },
     []
   );
+
+  const exportToCSV = useCallback(() => {
+    downloadCSV(sessions);
+  }, [sessions]);
 
   return (
     <AppContext.Provider
@@ -353,6 +515,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         toggleTimer,
         toggleTodo,
         addTodo,
+        exportToCSV,
         showNewTaskDialog,
         setShowNewTaskDialog,
         showEndTaskDialog,
