@@ -26,7 +26,7 @@ export function EndTaskDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex flex-col justify-end"
       style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) handleCancel();
@@ -36,12 +36,13 @@ export function EndTaskDialog() {
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative rounded-2xl"
+        className="relative rounded-t-2xl"
         style={{
-          width: 440,
+          width: "100%",
+          maxHeight: "80vh",
           background: "#161820",
           border: "1px solid #252836",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+          boxShadow: "0 -12px 40px rgba(0,0,0,0.5)",
         }}
       >
         {/* Header */}
@@ -181,10 +182,12 @@ export function EndTaskDialog() {
           </div>
         </div>
 
-        {/* Footer */}
         <div
           className="flex items-center justify-end gap-3 px-6 py-4"
-          style={{ borderTop: "1px solid #252836" }}
+          style={{
+            borderTop: "1px solid #252836",
+            paddingBottom: "max(16px, env(safe-area-inset-bottom))",
+          }}
         >
           <button
             onClick={handleCancel}

@@ -3,6 +3,7 @@ import { Layout } from "./components/Layout";
 import { Dashboard } from "./components/Dashboard";
 import { Worklog } from "./components/Worklog";
 import { Timeline } from "./components/Timeline";
+import { TodoPage } from "./components/TodoPage";
 
 export const router = createBrowserRouter([
   {
@@ -10,6 +11,7 @@ export const router = createBrowserRouter([
     Component: Layout,
     children: [
       { index: true, Component: Dashboard },
+      { path: "todo", Component: TodoPage },
       { path: "worklog", Component: Worklog },
       { path: "timeline", Component: Timeline },
     ],

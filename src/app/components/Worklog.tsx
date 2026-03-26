@@ -52,8 +52,8 @@ function StatCard({
 }) {
   return (
     <div
-      className="rounded-xl p-4 flex items-start gap-3"
-      style={{ background: "#161820", border: "1px solid #252836" }}
+      className="rounded-xl p-4 flex items-start gap-3 flex-shrink-0"
+      style={{ background: "#161820", border: "1px solid #252836", minWidth: 140 }}
     >
       <div
         className="flex items-center justify-center rounded-lg flex-shrink-0"
@@ -220,8 +220,8 @@ export function Worklog() {
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      {/* Stat cards - horizontal scroll on mobile */}
+      <div className="flex gap-3 mb-4 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
         <StatCard
           label="总工时"
           value={`${Math.floor(totalTime / 3600)}h ${Math.floor((totalTime % 3600) / 60)}m`}
@@ -245,7 +245,7 @@ export function Worklog() {
         />
       </div>
 
-      <div className="grid gap-6" style={{ gridTemplateColumns: "1fr 240px" }}>
+      <div className="flex flex-col gap-4">
         {/* Main content */}
         <div className="flex flex-col gap-5">
           {/* Hourly bar chart */}
@@ -281,7 +281,7 @@ export function Worklog() {
           {/* Filters */}
           <div className="flex items-center gap-3">
             <div
-              className="flex items-center gap-2 flex-1 px-3 py-2 rounded-lg"
+              className="flex items-center gap-2 flex-1 min-w-0 px-3 py-2 rounded-lg"
               style={{ background: "#161820", border: "1px solid #252836" }}
             >
               <Search size={14} style={{ color: "#8B8FA8" }} />
@@ -294,7 +294,7 @@ export function Worklog() {
               />
             </div>
             <div
-              className="flex gap-1 p-1 rounded-lg"
+              className="flex gap-1 p-1 rounded-lg overflow-x-auto"
               style={{ background: "#161820", border: "1px solid #252836" }}
             >
               {["全部", ...CATEGORIES.map((c) => c.name)].map((f) => (

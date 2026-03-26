@@ -47,7 +47,7 @@ export function NewTaskDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50 flex flex-col justify-end"
       style={{ background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) setShowNewTaskDialog(false);
@@ -57,12 +57,13 @@ export function NewTaskDialog() {
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96 }}
-        className="relative rounded-2xl flex flex-col"
+        className="relative rounded-t-2xl flex flex-col"
         style={{
-          width: 500,
+          width: "100%",
+          maxHeight: "90vh",
           background: "#161820",
           border: "1px solid #252836",
-          boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
+          boxShadow: "0 -12px 40px rgba(0,0,0,0.5)",
         }}
       >
         {/* Header */}
@@ -316,7 +317,13 @@ export function NewTaskDialog() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+        <div
+          className="flex items-center justify-between px-5 py-3 flex-shrink-0"
+          style={{
+            borderTop: "1px solid #252836",
+            paddingBottom: "max(12px, env(safe-area-inset-bottom))",
+          }}
+        >
             <button
               onClick={() => setShowNewTaskDialog(false)}
               className="px-4 py-2 rounded-lg transition-colors"
