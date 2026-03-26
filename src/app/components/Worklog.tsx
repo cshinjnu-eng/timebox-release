@@ -19,6 +19,7 @@ import {
   Search,
   Download,
   Target,
+  Trash2,
 } from "lucide-react";
 import { useApp, formatDuration, getCategoryInfo, getEvalTagInfo, CATEGORIES, WorkSession } from "../context/AppContext";
 
@@ -89,10 +90,11 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export function Worklog() {
-  const { sessions, exportToCSV } = useApp();
+  const { sessions, exportToCSV, deleteSession } = useApp();
   const [dateFilter, setDateFilter] = useState("今天");
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("全部");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Filter sessions
   const filteredSessions = useMemo(() => {
@@ -343,12 +345,14 @@ export function Worklog() {
                     {daySessions.map((session) => {
                       const cat = getCategoryInfo(session.category);
                       return (
+                        <div key={session.id} className="flex flex-col">
                         <div
-                          key={session.id}
-                          className="flex items-center gap-3 px-4 py-3 rounded-xl"
+                          className={`flex items-center gap-3 px-4 py-3 group ${confirmDeleteId === session.id ? "rounded-t-xl" : "rounded-xl"}`}
                           style={{
                             background: "#161820",
-                            border: "1px solid #252836",
+                            border: confirmDeleteId === session.id ? "1px solid rgba(239,68,68,0.3)" : "1px solid #252836",
+                            borderBottom: confirmDeleteId === session.id ? "none" : undefined,
+                            transition: "border-color 0.2s",
                           }}
                         >
                           <div
@@ -423,6 +427,55 @@ export function Worklog() {
                               {session.category}
                             </span>
                           </div>
+                          {/* Delete button */}
+                          <button
+                            onClick={() => setConfirmDeleteId(
+                              confirmDeleteId === session.id ? null : session.id
+                            )}
+                            className="flex items-center justify-center rounded-lg transition-all opacity-0 group-hover:opacity-100 flex-shrink-0"
+                            style={{
+                              width: 30,
+                              height: 30,
+                              background: confirmDeleteId === session.id ? "rgba(239,68,68,0.15)" : "#1A1D29",
+                              color: confirmDeleteId === session.id ? "#EF4444" : "#525675",
+                            }}
+                            title="删除记录"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        {/* Delete confirmation */}
+                        {confirmDeleteId === session.id && (
+                          <div
+                            className="flex items-center justify-end gap-2 px-4 py-2 rounded-b-xl"
+                            style={{
+                              background: "rgba(239,68,68,0.06)",
+                              border: "1px solid rgba(239,68,68,0.3)",
+                              borderTop: "1px solid rgba(239,68,68,0.15)",
+                            }}
+                          >
+                            <span style={{ fontSize: 12, color: "#EF4444", flex: 1 }}>
+                              确认删除这条记录？
+                            </span>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-3 py-1 rounded-md text-xs transition-colors"
+                              style={{ background: "#252836", color: "#8B8FA8" }}
+                            >
+                              取消
+                            </button>
+                            <button
+                              onClick={() => {
+                                deleteSession(session.id);
+                                setConfirmDeleteId(null);
+                              }}
+                              className="px-3 py-1 rounded-md text-xs transition-colors"
+                              style={{ background: "#EF4444", color: "#fff", fontWeight: 600 }}
+                            >
+                              确认删除
+                            </button>
+                          </div>
+                        )}
                         </div>
                       );
                     })}

@@ -91,6 +91,7 @@ interface AppContextType {
     estimatedMinutes?: number;
   }) => void;
   endTask: (id: string, feeling?: string) => void;
+  deleteSession: (id: string) => void;
   exportToCSV: () => void;
   toggleTimer: (id: string) => void;
   toggleTodo: (id: string) => void;
@@ -504,6 +505,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     downloadCSV(sessions);
   }, [sessions]);
 
+  const deleteSessionFn = useCallback((id: string) => {
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    deleteEvent(id).catch(console.warn);
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
@@ -516,6 +522,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         toggleTodo,
         addTodo,
         exportToCSV,
+        deleteSession: deleteSessionFn,
         showNewTaskDialog,
         setShowNewTaskDialog,
         showEndTaskDialog,

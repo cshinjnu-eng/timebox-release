@@ -181,22 +181,50 @@ export function Timeline() {
       return { session: s, top, height, overlapIndex: 0, overlap: 1 };
     });
 
-    // Overlap detection
+    // ─── Sweep-line column assignment ────────────────────────────
+    // For each block, assign it to the first available column.
+    // Track the end position of each column to know when it's free.
+    const columnEnds: number[] = []; // columnEnds[col] = bottom-y of the last block in that column
+
     for (let i = 0; i < results.length; i++) {
-      const group: number[] = [i];
-      for (let j = i + 1; j < results.length; j++) {
-        const a = results[i];
-        const b = results[j];
-        if (b.top < a.top + a.height) {
-          group.push(j);
+      const block = results[i];
+      const blockTop = block.top;
+      const blockBottom = block.top + block.height;
+
+      // Find the first column where this block fits (no overlap)
+      let assignedCol = -1;
+      for (let col = 0; col < columnEnds.length; col++) {
+        if (columnEnds[col] <= blockTop + 0.5) { // 0.5px tolerance
+          assignedCol = col;
+          break;
         }
       }
-      if (group.length > 1) {
-        group.forEach((idx, gi) => {
-          results[idx].overlap = group.length;
-          results[idx].overlapIndex = gi;
-        });
+
+      if (assignedCol === -1) {
+        // Need a new column
+        assignedCol = columnEnds.length;
+        columnEnds.push(blockBottom);
+      } else {
+        columnEnds[assignedCol] = blockBottom;
       }
+
+      block.overlapIndex = assignedCol;
+    }
+
+    // ─── Compute max concurrent columns per overlap group ────────
+    // For each block, determine how many columns are active at its position
+    for (let i = 0; i < results.length; i++) {
+      let maxCols = results[i].overlapIndex + 1;
+      for (let j = 0; j < results.length; j++) {
+        if (i === j) continue;
+        const a = results[i];
+        const b = results[j];
+        // Check if blocks overlap vertically
+        if (b.top < a.top + a.height && b.top + b.height > a.top) {
+          maxCols = Math.max(maxCols, b.overlapIndex + 1);
+        }
+      }
+      results[i].overlap = maxCols;
     }
 
     return results;
@@ -424,7 +452,7 @@ export function Timeline() {
                       category={session.category}
                       time={`${startStr} – ${endStr}`}
                       duration={formatDuration(session.duration)}
-                      notes={session.notes}
+                      notes={session.feeling}
                       overlap={overlap}
                       overlapIndex={overlapIndex}
                     />
