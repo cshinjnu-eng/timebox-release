@@ -11,9 +11,13 @@ import {
   saveEvent,
   deleteEvent,
   getEventsByBucket,
+  clearAllData as clearAllDataDB,
   type EventRecord,
 } from "../services/db";
 import { downloadCSV } from "../services/exportCSV";
+import { Capacitor, registerPlugin } from "@capacitor/core";
+
+const FloatingWindow = registerPlugin<any>("FloatingWindow");
 
 // ─── 定性标签（五选一） ────────────────────────────────────────────────
 export const CATEGORIES = [
@@ -76,6 +80,7 @@ export interface WorkSession {
   feeling?: string;        // 完成感受
   tags: string[];          // 自定义标签
   estimatedMinutes?: number; // 预计时间（分钟）
+  outcome?: "completed" | "abandoned"; // 完成结果
 }
 
 interface AppContextType {
@@ -90,20 +95,32 @@ interface AppContextType {
     tags: string[];
     estimatedMinutes?: number;
   }) => void;
-  endTask: (id: string, feeling?: string) => void;
+  endTask: (id: string, feeling?: string, outcome?: "completed" | "abandoned") => void;
+  updateSession: (session: WorkSession) => void;
+  addManualSession: (data: {
+    name: string;
+    category: string;
+    evalTag?: string;
+    startTime: Date;
+    endTime: Date;
+    feeling?: string;
+    tags: string[];
+  }) => void;
   deleteSession: (id: string) => void;
   exportToCSV: () => void;
+  clearAllData: () => Promise<void>;
   toggleTimer: (id: string) => void;
   toggleTodo: (id: string) => void;
   addTodo: (text: string, category: string, priority: "high" | "medium" | "low") => void;
+  showFloating: () => void;
   showNewTaskDialog: boolean;
   setShowNewTaskDialog: (v: boolean) => void;
   showEndTaskDialog: boolean;
   setShowEndTaskDialog: (v: boolean) => void;
+  showManualSessionDialog: boolean;
+  setShowManualSessionDialog: (v: boolean) => void;
   taskToEnd: Task | null;
   setTaskToEnd: (t: Task | null) => void;
-  showFloatingWidget: boolean;
-  setShowFloatingWidget: (v: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -170,6 +187,7 @@ function sessionToEvent(s: WorkSession): EventRecord {
       feeling: s.feeling,
       tags: s.tags,
       estimatedMinutes: s.estimatedMinutes,
+      outcome: s.outcome,
     },
   };
 }
@@ -188,6 +206,7 @@ function eventToSession(e: EventRecord): WorkSession {
     feeling: d.feeling,
     tags: d.tags || [],
     estimatedMinutes: d.estimatedMinutes,
+    outcome: d.outcome,
   };
 }
 
@@ -223,8 +242,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<WorkSession[]>(INITIAL_SESSIONS);
   const [showNewTaskDialog, setShowNewTaskDialog] = useState(false);
   const [showEndTaskDialog, setShowEndTaskDialog] = useState(false);
+  const [showManualSessionDialog, setShowManualSessionDialog] = useState(false);
   const [taskToEnd, setTaskToEnd] = useState<Task | null>(null);
-  const [showFloatingWidget, setShowFloatingWidget] = useState(true);
   const [dbReady, setDbReady] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -248,27 +267,102 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setDbReady(true);
       }
     })();
+
+    // 初始检查权限与状态同步 (Android 专用)
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      // 1. 检查悬浮窗权限
+      FloatingWindow.checkPermission().then((res: { granted: boolean }) => {
+        if (!res.granted) {
+          FloatingWindow.requestPermission();
+        }
+      });
+
+      // 2. 状态热恢复：从原生 Service 获取当前计时状态，并启动悬浮窗
+      setTimeout(async () => {
+        try {
+          const status = await FloatingWindow.getStatus();
+          if (status.isRunning) {
+            console.log("[Native Sync] Restoring state from Service:", status);
+            setTasks((prev) => {
+              const taskIndex = prev.findIndex(t => t.name === status.name);
+              if (taskIndex !== -1) {
+                const updated = [...prev];
+                updated[taskIndex] = {
+                  ...updated[taskIndex],
+                  isRunning: true,
+                  startTime: new Date(status.startTime),
+                  elapsed: status.elapsed
+                };
+                return updated;
+              }
+              return prev;
+            });
+          }
+        } catch (e) {
+          console.warn("[Native Sync] Failed to get status", e);
+        }
+        // 启动悬浮窗（不管服务是否在运行，都尝试为正在计时的任务启动）
+        const running = tasksRef.current.filter((t) => t.isRunning);
+        running.forEach((t) => {
+          FloatingWindow.startFloating({
+            name: t.name,
+            startTime: Date.now() - t.elapsed * 1000,
+            elapsed: 0,
+            color: t.color,
+          });
+        });
+      }, 2000);
+    }
   }, []);
 
-  // ─── 持久化同步 ────────────────────────────────────────────────
-  useEffect(() => {
-    if (!dbReady) return;
-    // 每 10s 持久化一次 tasks（含 elapsed 更新）
-    const syncInterval = setInterval(() => {
-      tasks.forEach((t) => saveEvent(taskToEvent(t)).catch(console.warn));
-    }, 10000);
-    return () => clearInterval(syncInterval);
-  }, [dbReady, tasks]);
+  // ─── 持久化同步（每 30s 一次，不依赖 tasks 避免频繁重置） ──────
+  const tasksRef = useRef<Task[]>([]);
+  tasksRef.current = tasks;
 
   useEffect(() => {
+    if (!dbReady) return;
+    const syncInterval = setInterval(() => {
+      tasksRef.current.forEach((t) => saveEvent(taskToEvent(t)).catch(console.warn));
+    }, 30000);
+    return () => clearInterval(syncInterval);
+  }, [dbReady]);
+
+  // ─── 秒级计时（纯 state 更新，无副作用） ──────────────────────
+  useEffect(() => {
     intervalRef.current = setInterval(() => {
-      setTasks((prev) =>
-        prev.map((t) => (t.isRunning ? { ...t, elapsed: t.elapsed + 1 } : t))
-      );
+      setTasks((prev) => prev.map((t) => (t.isRunning ? { ...t, elapsed: t.elapsed + 1 } : t)));
     }, 1000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
+  }, []);
+
+  // ─── 前台恢复时从 FloatingService 同步 elapsed（以悬浮窗为准） ──
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const res = await FloatingWindow.getActiveTasks();
+        const serviceMap: Record<string, number> = {};
+        (res.tasks || []).forEach((t: { name: string; elapsed: number }) => {
+          serviceMap[t.name] = t.elapsed;
+        });
+        setTasks((prev) =>
+          prev.map((t) => {
+            const svcElapsed = serviceMap[t.name];
+            if (t.isRunning && svcElapsed != null && svcElapsed > t.elapsed) {
+              return { ...t, elapsed: svcElapsed };
+            }
+            return t;
+          })
+        );
+      } catch (e) {
+        // service not running, ignore
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   const addTask = useCallback(
@@ -297,40 +391,78 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       };
       setTasks((prev) => [...prev, newTask]);
       saveEvent(taskToEvent(newTask)).catch(console.warn);
+      if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+        FloatingWindow.startFloating({
+          name: newTask.name,
+          startTime: Date.now(),
+          elapsed: 0,
+          color: newTask.color,
+        });
+      }
     },
     []
   );
 
-  const endTask = useCallback((id: string, feeling?: string) => {
-    setTasks((prev) => {
-      const task = prev.find((t) => t.id === id);
-      if (task) {
-        const session: WorkSession = {
-          id: makeId(),
-          taskName: task.name,
-          category: task.category,
-          evalTag: task.evalTag,
-          color: task.color,
-          startTime: task.startTime,
-          endTime: new Date(),
-          duration: task.elapsed,
-          feeling,
-          tags: task.tags,
-          estimatedMinutes: task.estimatedMinutes,
-        };
-        setSessions((s) => [session, ...s]);
-        saveEvent(sessionToEvent(session)).catch(console.warn);
-        deleteEvent(task.id).catch(console.warn); // 从 tasks bucket 移除
+  const endTask = useCallback((id: string, feeling?: string, outcome?: "completed" | "abandoned") => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+
+    const session: WorkSession = {
+      id: makeId(),
+      taskName: task.name,
+      category: task.category,
+      evalTag: task.evalTag,
+      color: task.color,
+      startTime: task.startTime,
+      endTime: new Date(),
+      duration: task.elapsed,
+      feeling,
+      tags: task.tags,
+      estimatedMinutes: task.estimatedMinutes,
+      outcome,
+    };
+    setSessions((s) => [session, ...s]);
+    saveEvent(sessionToEvent(session)).catch(console.warn);
+    deleteEvent(task.id).catch(console.warn);
+
+    const remaining = tasks.filter((t) => t.id !== id);
+    setTasks(remaining);
+
+    // 同步原生悬浮窗 — 副作用放在 setTasks 之外
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      const hasRunning = remaining.some((t) => t.isRunning);
+      if (!hasRunning) {
+        FloatingWindow.stopFloating();
+      } else {
+        FloatingWindow.removeTask({ name: task.name });
       }
-      return prev.filter((t) => t.id !== id);
-    });
-  }, []);
+    }
+  }, [tasks]);
 
   const toggleTimer = useCallback((id: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isRunning: !t.isRunning } : t))
-    );
-  }, []);
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    setTasks(tasks.map((t) => (t.id === id ? { ...t, isRunning: !t.isRunning } : t)));
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      if (task.isRunning) {
+        // 暂停：冻结计数（startTime=0 → service 直接返回 elapsed）
+        FloatingWindow.startFloating({
+          name: task.name,
+          startTime: 0,
+          elapsed: task.elapsed,
+          color: task.color,
+        });
+      } else {
+        // 恢复：以当前 elapsed 为基础发虚拟起始时间
+        FloatingWindow.startFloating({
+          name: task.name,
+          startTime: Date.now() - task.elapsed * 1000,
+          elapsed: 0,
+          color: task.color,
+        });
+      }
+    }
+  }, [tasks]);
 
   const toggleTodo = useCallback((id: string) => {
     setTodos((prev) => {
@@ -359,9 +491,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     downloadCSV(sessions);
   }, [sessions]);
 
+  const addManualSession = useCallback(
+    (data: {
+      name: string;
+      category: string;
+      evalTag?: string;
+      startTime: Date;
+      endTime: Date;
+      feeling?: string;
+      tags: string[];
+    }) => {
+      const cat = getCategoryInfo(data.category);
+      const durationSec = Math.round((data.endTime.getTime() - data.startTime.getTime()) / 1000);
+      const session: WorkSession = {
+        id: makeId(),
+        taskName: data.name,
+        category: data.category,
+        evalTag: data.evalTag,
+        color: cat.color,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        duration: durationSec,
+        feeling: data.feeling,
+        tags: data.tags,
+      };
+      setSessions((s) => [session, ...s]);
+      saveEvent(sessionToEvent(session)).catch(console.warn);
+    },
+    []
+  );
+
   const deleteSessionFn = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     deleteEvent(id).catch(console.warn);
+  }, []);
+
+  const updateSessionFn = useCallback((updated: WorkSession) => {
+    setSessions((prev) => prev.map((s) => s.id === updated.id ? updated : s));
+    saveEvent(sessionToEvent(updated)).catch(console.warn);
+  }, []);
+
+  const clearAllDataFn = useCallback(async () => {
+    await clearAllDataDB();
+    setTasks([]);
+    setSessions([]);
+    setTodos([]);
   }, []);
 
   return (
@@ -372,19 +546,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         sessions,
         addTask,
         endTask,
+        addManualSession,
         toggleTimer,
         toggleTodo,
         addTodo,
         exportToCSV,
         deleteSession: deleteSessionFn,
+        updateSession: updateSessionFn,
+        clearAllData: clearAllDataFn,
+        showFloating: () => {
+          if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+          const running = tasksRef.current.filter((t) => t.isRunning);
+          if (running.length === 0) return;
+          running.forEach((t) => {
+            FloatingWindow.startFloating({
+              name: t.name,
+              startTime: Date.now() - t.elapsed * 1000,
+              elapsed: 0,
+              color: t.color,
+            });
+          });
+        },
         showNewTaskDialog,
         setShowNewTaskDialog,
         showEndTaskDialog,
         setShowEndTaskDialog,
+        showManualSessionDialog,
+        setShowManualSessionDialog,
         taskToEnd,
         setTaskToEnd,
-        showFloatingWidget,
-        setShowFloatingWidget,
       }}
     >
       {children}

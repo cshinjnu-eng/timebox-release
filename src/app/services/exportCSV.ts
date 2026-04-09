@@ -66,21 +66,52 @@ export function generateCSV(sessions: WorkSession[]): string {
   return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
 }
 
+import { Filesystem, Directory, Encoding } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
+import { Capacitor } from "@capacitor/core";
+
 export function downloadCSV(sessions: WorkSession[], filename?: string): void {
   const csv = generateCSV(sessions);
   const BOM = "\uFEFF"; // UTF-8 BOM for Excel compatibility
-  const blob = new Blob([BOM + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
+  const content = BOM + csv;
+  const defaultName = filename || `TimeBox_导出_${new Date().toISOString().slice(0, 10)}.csv`;
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename || `TimeBox_导出_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
+  if (Capacitor.getPlatform() === "android") {
+    // Android: Use Filesystem & Share
+    (async () => {
+      try {
+        const result = await Filesystem.writeFile({
+          path: defaultName,
+          data: content,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+        });
+        
+        await Share.share({
+          title: "导出 TimeBox 数据",
+          text: "这里是你的时间记录数据 CSR 文件",
+          url: result.uri,
+          dialogTitle: "分享 CSV 文件",
+        });
+      } catch (e) {
+        console.error("Android 导出失败", e);
+      }
+    })();
+  } else {
+    // Web: Legacy Blob Download
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
 
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }, 100);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = defaultName;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  }
 }

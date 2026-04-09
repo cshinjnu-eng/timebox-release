@@ -7,11 +7,14 @@ import {
   Plus,
   Download,
   Layers,
+  BookOpen,
 } from "lucide-react";
+import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { NewTaskDialog } from "./NewTaskDialog";
 import { EndTaskDialog } from "./EndTaskDialog";
-import { FloatingWidget } from "./FloatingWidget";
+import { ManualSessionDialog } from "./ManualSessionDialog";
+import { GuideModal } from "./GuideModal";
 
 const navItems = [
   { to: "/", label: "计时", icon: LayoutDashboard },
@@ -36,13 +39,16 @@ export function Layout() {
     showNewTaskDialog,
     setShowNewTaskDialog,
     showEndTaskDialog,
+    showManualSessionDialog,
     taskToEnd,
-    showFloatingWidget,
     exportToCSV,
   } = useApp();
+  const [showGuide, setShowGuide] = useState(false);
 
   const runningCount = tasks.filter((t) => t.isRunning).length;
-  const totalElapsed = tasks.reduce((sum, t) => sum + t.elapsed, 0);
+  const totalElapsed = tasks
+    .filter((t) => t.category === "工作" || t.category === "学习")
+    .reduce((sum, t) => sum + t.elapsed, 0);
   const totalHours = Math.floor(totalElapsed / 3600);
   const totalMin = Math.floor((totalElapsed % 3600) / 60);
 
@@ -79,6 +85,14 @@ export function Layout() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowGuide(true)}
+            className="flex items-center justify-center rounded-lg"
+            style={{ width: 34, height: 34, color: "#8B8FA8" }}
+            title="使用指南"
+          >
+            <BookOpen size={16} />
+          </button>
           <button
             onClick={exportToCSV}
             className="flex items-center justify-center rounded-lg"
@@ -137,9 +151,9 @@ export function Layout() {
       {/* Modals */}
       {showNewTaskDialog && <NewTaskDialog />}
       {showEndTaskDialog && taskToEnd && <EndTaskDialog />}
+      {showManualSessionDialog && <ManualSessionDialog />}
+      {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
 
-      {/* Floating widget */}
-      {showFloatingWidget && <FloatingWidget />}
     </div>
   );
 }

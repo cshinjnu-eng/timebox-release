@@ -8,7 +8,9 @@ import {
   Flame,
   MoreHorizontal,
   Target,
+  PictureInPicture2,
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { motion, AnimatePresence } from "motion/react";
 import {
   useApp,
@@ -214,7 +216,7 @@ function TimerCard({ task }: { task: Task }) {
 
 
 export function Dashboard() {
-  const { tasks, setShowNewTaskDialog } = useApp();
+  const { tasks, setShowNewTaskDialog, showFloating } = useApp();
 
   const runningCount = tasks.filter((t) => t.isRunning).length;
   const pausedCount = tasks.filter((t) => !t.isRunning).length;
@@ -236,19 +238,36 @@ export function Dashboard() {
               {runningCount} 个运行中 · {pausedCount} 个已暂停
             </p>
           </div>
-          <button
-            onClick={() => setShowNewTaskDialog(true)}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-2 transition-colors"
-            style={{
-              background: "rgba(79,127,255,0.12)",
-              color: "#4F7FFF",
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
-            <Plus size={15} />
-            新建计时
-          </button>
+          <div className="flex items-center gap-2">
+            {Capacitor.getPlatform() === "android" && runningCount > 0 && (
+              <button
+                onClick={showFloating}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-2 transition-colors"
+                style={{
+                  background: "rgba(16,185,129,0.12)",
+                  color: "#10B981",
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                <PictureInPicture2 size={15} />
+                悬浮窗
+              </button>
+            )}
+            <button
+              onClick={() => setShowNewTaskDialog(true)}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 transition-colors"
+              style={{
+                background: "rgba(79,127,255,0.12)",
+                color: "#4F7FFF",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              <Plus size={15} />
+              新建计时
+            </button>
+          </div>
         </div>
 
         {/* Timer cards - single column for mobile */}

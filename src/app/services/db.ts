@@ -119,6 +119,17 @@ export async function getAllEvents(): Promise<EventRecord[]> {
   return getAll("events");
 }
 
+export async function clearAllData(): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["events", "buckets"], "readwrite");
+    tx.objectStore("events").clear();
+    tx.objectStore("buckets").clear();
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+
 // ─── 初始化默认 Buckets ──────────────────────────────────────────────
 
 export async function ensureDefaultBuckets(): Promise<void> {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, X, Clock, Target } from "lucide-react";
+import { AlertTriangle, X, Clock, Target, CheckCircle2, XCircle } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, formatElapsed, formatDuration, getEvalTagInfo } from "../context/AppContext";
 
@@ -11,9 +11,9 @@ export function EndTaskDialog() {
 
   const evalInfo = taskToEnd.evalTag ? getEvalTagInfo(taskToEnd.evalTag) : null;
 
-  function handleConfirm() {
+  function handleConfirm(outcome: "completed" | "abandoned") {
     if (taskToEnd) {
-      endTask(taskToEnd.id, feeling.trim() || undefined);
+      endTask(taskToEnd.id, feeling.trim() || undefined, outcome);
     }
     setShowEndTaskDialog(false);
     setTaskToEnd(null);
@@ -151,7 +151,7 @@ export function EndTaskDialog() {
                   </span>
                   <span style={{ fontSize: 12, color: "#525675" }}>→</span>
                   <span style={{ fontSize: 12, color: statusColor, fontWeight: 600 }}>
-                    {statusText}
+                    {ratio <= 1 ? `提前 ${formatDuration(Math.abs(delta))} 结束` : `超时 ${formatDuration(Math.abs(delta))}`}
                   </span>
                 </div>
               );
@@ -183,7 +183,7 @@ export function EndTaskDialog() {
         </div>
 
         <div
-          className="flex items-center justify-end gap-3 px-6 py-4"
+          className="flex items-center gap-3 px-6 py-4"
           style={{
             borderTop: "1px solid #252836",
             paddingBottom: "max(16px, env(safe-area-inset-bottom))",
@@ -191,22 +191,38 @@ export function EndTaskDialog() {
         >
           <button
             onClick={handleCancel}
-            className="px-4 py-2 rounded-lg transition-colors"
+            className="px-4 py-2 rounded-lg transition-colors flex-shrink-0"
             style={{ background: "#252836", color: "#8B8FA8", fontSize: 13 }}
           >
             继续计时
           </button>
+          <div style={{ flex: 1 }} />
           <button
-            onClick={handleConfirm}
-            className="px-5 py-2 rounded-lg transition-opacity hover:opacity-90"
+            onClick={() => handleConfirm("abandoned")}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg transition-opacity hover:opacity-90"
             style={{
-              background: "#EF4444",
+              background: "rgba(245,158,11,0.12)",
+              color: "#F59E0B",
+              border: "1px solid rgba(245,158,11,0.3)",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <XCircle size={14} />
+            中途放弃
+          </button>
+          <button
+            onClick={() => handleConfirm("completed")}
+            className="flex items-center gap-1.5 px-5 py-2 rounded-lg transition-opacity hover:opacity-90"
+            style={{
+              background: "#10B981",
               color: "#fff",
               fontSize: 13,
               fontWeight: 600,
             }}
           >
-            确认结束
+            <CheckCircle2 size={14} />
+            完成任务
           </button>
         </div>
       </motion.div>

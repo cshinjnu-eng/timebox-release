@@ -97,6 +97,13 @@ export function FloatingWidget() {
     e.preventDefault();
   }, [pos]);
 
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    dragging.current = true;
+    dragOffset.current = { x: touch.clientX - pos.x, y: touch.clientY - pos.y };
+    e.preventDefault();
+  }, [pos]);
+
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!dragging.current) return;
@@ -105,14 +112,27 @@ export function FloatingWidget() {
         y: Math.max(0, Math.min(window.innerHeight - 60, e.clientY - dragOffset.current.y)),
       });
     }
+    function onTouchMove(e: TouchEvent) {
+      if (!dragging.current) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      setPos({
+        x: Math.max(0, Math.min(window.innerWidth - 260, touch.clientX - dragOffset.current.x)),
+        y: Math.max(0, Math.min(window.innerHeight - 60, touch.clientY - dragOffset.current.y)),
+      });
+    }
     function onUp() {
       dragging.current = false;
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onUp);
     };
   }, []);
 
@@ -136,6 +156,7 @@ export function FloatingWidget() {
         {/* Header (draggable) */}
         <div
           onMouseDown={onMouseDown}
+          onTouchStart={onTouchStart}
           className="flex items-center justify-between px-3 py-2.5 cursor-grab active:cursor-grabbing"
           style={{ borderBottom: expanded ? "1px solid #252836" : "none" }}
         >

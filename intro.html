@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TimeBox - 掌控每一秒的价值</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0B0D14;
+            color: #E8EAF0;
+            overflow-x: hidden;
+        }
+        .glass {
+            background: rgba(22, 24, 32, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .hero-gradient {
+            background: radial-gradient(circle at top right, rgba(79, 127, 255, 0.15), transparent),
+                        radial-gradient(circle at bottom left, rgba(168, 85, 247, 0.15), transparent);
+        }
+        .text-gradient {
+            background: linear-gradient(135deg, #4F7FFF, #A855F7);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+            100% { transform: translateY(0px); }
+        }
+        .phone-mockup {
+            box-shadow: 0 50px 100px -20px rgba(0,0,0,0.5), 0 30px 60px -30px rgba(0,0,0,0.5);
+            border: 8px solid #252836;
+            border-radius: 3rem;
+        }
+    </style>
+</head>
+<body class="hero-gradient">
+    <!-- Navbar -->
+    <nav class="fixed top-0 w-full z-50 glass px-6 py-4">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-[#4F7FFF] to-[#A855F7] flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" class="w-5 h-5">
+                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                    </svg>
+                </div>
+                <span class="text-xl font-bold tracking-tight">TimeBox</span>
+            </div>
+            <div class="hidden md:flex gap-8 text-sm font-medium text-[#8B8FA8]">
+                <a href="#features" class="hover:text-white transition-colors">功能</a>
+                <a href="#preview" class="hover:text-white transition-colors">预览</a>
+                <a href="#download" class="hover:text-white transition-colors">下载</a>
+            </div>
+            <a href="file:///Users/chensihan/Desktop/TimeBox-v2.1-Fixes.apk" class="px-5 py-2 rounded-full bg-white text-black text-sm font-bold hover:bg-opacity-90 transition-all">
+                立即下载
+            </a>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <header class="relative pt-32 pb-20 px-6 overflow-hidden">
+        <div class="max-w-7xl mx-auto flex flex-col lg:flex-row items-center gap-16">
+            <div class="flex-1 text-center lg:text-left z-10">
+                <h1 class="text-5xl lg:text-7xl font-bold leading-tight mb-6">
+                    多线程并行记录<br><span class="text-gradient">打破单一计时</span>
+                </h1>
+                <p class="text-lg lg:text-xl text-[#8B8FA8] mb-10 max-w-xl mx-auto lg:mx-0">
+                    不只是计时器。支持多任务并行追踪，全局系统级悬浮窗常驻，让“个人感想”成为您提升自我认知的核心资产。
+                </p>
+                <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+                    <button class="px-8 py-4 rounded-xl bg-gradient-to-r from-[#4F7FFF] to-[#A855F7] font-bold text-lg shadow-lg hover:shadow-purple-500/20 transition-all">
+                        立刻开启并行计时
+                    </button>
+                    <a href="#roadmap" class="px-8 py-4 rounded-xl glass font-bold text-lg hover:bg-white/5 transition-all">
+                        查看未来计划
+                    </a>
+                </div>
+            </div>
+            <div class="flex-1 relative animate-float">
+                <div class="phone-mockup overflow-hidden max-w-[320px] mx-auto border-8 border-[#161820]">
+                    <img src="file:///Users/chensihan/.gemini/antigravity/brain/54de28c5-e7d2-4447-8bab-66b93dea7bb6/dashboard_mobile_initial_1774545133370.png" alt="Dashboard Preview" class="w-full">
+                </div>
+                <!-- Background Glow -->
+                <div class="absolute -z-10 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-[#4F7FFF] rounded-full blur-[120px] opacity-20"></div>
+            </div>
+        </div>
+        
+        <!-- Background Image -->
+        <img src="file:///Users/chensihan/.gemini/antigravity/brain/54de28c5-e7d2-4447-8bab-66b93dea7bb6/timebox_hero_bg_1774672504639.png" class="absolute top-0 right-0 w-2/3 -z-20 opacity-30 mask-gradient" alt="">
+    </header>
+
+    <!-- Features Section -->
+    <section id="features" class="py-24 px-6 bg-[#0B0D14]">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl lg:text-4xl font-bold mb-4">核心设计理念</h2>
+                <div class="h-1 w-20 bg-gradient-to-r from-[#4F7FFF] to-[#A855F7] mx-auto"></div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                <div class="glass p-8 rounded-2xl">
+                    <div class="w-12 h-12 rounded-xl bg-[#4F7FFF]/10 flex items-center justify-center mb-6 text-[#4F7FFF]">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-3">多任务并行记录</h3>
+                    <p class="text-sm text-[#8B8FA8] leading-relaxed">
+                        支持同时开启多个计时器。适合在复杂工作中灵活切换场景，精准捕捉跨任务的碎片时间。
+                    </p>
+                </div>
+                <div class="glass p-8 rounded-2xl">
+                    <div class="w-12 h-12 rounded-xl bg-[#A855F7]/10 flex items-center justify-center mb-6 text-[#A855F7]">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-3">全局悬浮控制</h3>
+                    <p class="text-sm text-[#8B8FA8] leading-relaxed">
+                        原生系统级悬浮窗，无论您在哪一个 App，计时器永远触手可及，甚至支持后台自维持计时。
+                    </p>
+                </div>
+                <div class="glass p-8 rounded-2xl">
+                    <div class="w-12 h-12 rounded-xl bg-[#10B981]/10 flex items-center justify-center mb-6 text-[#10B981]">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-3">感悟即刻记录</h3>
+                    <p class="text-sm text-[#8B8FA8] leading-relaxed">
+                        集成五级情绪与详细感想录入。不仅记录时间花在了哪，更记录了您在那个当下的主观成就感。
+                    </p>
+                </div>
+                <div class="glass p-8 rounded-2xl">
+                    <div class="w-12 h-12 rounded-xl bg-[#F59E0B]/10 flex items-center justify-center mb-6 text-[#F59E0B]">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-bold mb-3">数据本地审计</h3>
+                    <p class="text-sm text-[#8B8FA8] leading-relaxed">
+                        所有记录均存储于本地，支持导出全量 CSV 报告，供您进行深度的效率复盘与二次分析。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Roadmap Section -->
+    <section id="roadmap" class="py-24 px-6 relative bg-gradient-to-t from-[#161820] to-[#0B0D14]">
+        <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-16">
+                <h2 class="text-3xl lg:text-4xl font-bold mb-4">未来愿景</h2>
+                <p class="text-[#8B8FA8]">探索更智能的时间交互边界</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-12">
+                <div class="relative group">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-[#4F7FFF] to-[#A855F7] rounded-3xl blur opacity-25 group-hover:opacity-50 transition duration-1000"></div>
+                    <div class="relative glass p-8 rounded-3xl">
+                        <div class="text-2xl font-bold mb-4 text-white">屏幕使用联动</div>
+                        <p class="text-[#8B8FA8] text-sm leading-relaxed">结合本机 App 开启频率与时长，自动建议计时场景，实现“无感”任务录入与补记。</p>
+                        <div class="mt-6 text-xs font-bold text-[#4F7FFF] uppercase tracking-widest">In Design</div>
+                    </div>
+                </div>
+                <div class="relative group">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-[#4F7FFF] to-[#A855F7] rounded-3xl blur opacity-25 group-hover:opacity-50 transition duration-1000"></div>
+                    <div class="relative glass p-8 rounded-3xl">
+                        <div class="text-2xl font-bold mb-4 text-white">日程智能导入</div>
+                        <p class="text-[#8B8FA8] text-sm leading-relaxed">一键同步系统日历与会议安排，自动对应计时任务模板，彻底告别重复性的文本创建。</p>
+                        <div class="mt-6 text-xs font-bold text-[#A855F7] uppercase tracking-widest">Planning</div>
+                    </div>
+                </div>
+                <div class="relative group">
+                    <div class="absolute -inset-1 bg-gradient-to-r from-[#4F7FFF] to-[#A855F7] rounded-3xl blur opacity-25 group-hover:opacity-50 transition duration-1000"></div>
+                    <div class="relative glass p-8 rounded-3xl">
+                        <div class="text-2xl font-bold mb-4 text-white">一键生成日记</div>
+                        <p class="text-[#8B8FA8] text-sm leading-relaxed">将你的所思所想每时每刻记录并提供用于日志或视频 AI 的提示词，渲染你的生活。</p>
+                        <div class="mt-6 text-xs font-bold text-[#10B981] uppercase tracking-widest">Upcoming</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+
+
+
+    <!-- Download Section -->
+    <section id="download" class="py-32 px-6 text-center">
+        <div class="max-w-2xl mx-auto">
+            <h2 class="text-4xl lg:text-5xl font-bold mb-6">准备好提升效率了吗？</h2>
+            <p class="text-[#8B8FA8] mb-12">立即下载 TimeBox Android 版，开启您的极速效率之旅。</p>
+            <div class="flex flex-col sm:flex-row gap-6 justify-center">
+                <a href="file:///Users/chensihan/Desktop/TimeBox-v2.1-Fixes.apk" class="flex items-center justify-center gap-3 px-10 py-5 rounded-2xl bg-white text-black font-bold text-lg hover:scale-105 transition-all">
+                    <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17.523 15.3414C17.07 15.3414 16.703 15.7084 16.703 16.1614V18.1614H7.297V16.1614C7.297 15.7084 6.93 15.3414 6.47701 15.3414C6.02401 15.3414 5.657 15.7084 5.657 16.1614V18.9614C5.657 19.6244 6.194 20.1614 6.857 20.1614H17.143C17.806 20.1614 18.343 19.6244 18.343 18.9614V16.1614C18.343 15.7084 17.976 15.3414 17.523 15.3414Z" />
+                        <path d="M12.576 14.6114L15.32 11.8674C15.639 11.5484 15.639 11.0314 15.32 10.7124C15.001 10.3934 14.484 10.3934 14.16501 10.7124L12.82 12.0574V4.16141C12.82 3.70841 12.453 3.4141 12 3.4141C11.547 3.4141 11.18 3.70841 11.18 4.16141V12.0574L9.83501 10.7124C9.51601 10.3934 8.99901 10.3934 8.68001 10.7124C8.36101 11.0314 8.36101 11.5484 8.68001 11.8674L11.424 14.6114C11.742 14.9304 12.257 14.9304 12.576 14.6114Z" />
+                    </svg>
+                    下载 Android APK
+                </a>
+            </div>
+            <p class="mt-6 text-xs text-[#525675]">版本 v2.1 | 包含系统级悬浮窗与原生 CSV 分享修复</p>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-12 px-6 glass text-center text-sm text-[#525675]">
+        <p>© 2026 TimeBox Team. Built with Antigravity.</p>
+    </footer>
+
+    <script>
+        // Smooth scroll
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.querySelector(this.getAttribute('href')).scrollIntoView({
+                    behavior: 'smooth'
+                });
+            });
+        });
+    </script>
+</body>
+</html>

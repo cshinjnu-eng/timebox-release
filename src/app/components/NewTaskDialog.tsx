@@ -54,21 +54,22 @@ export function NewTaskDialog() {
       }}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96 }}
+        initial={{ opacity: 0, y: 40 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 40 }}
+        transition={{ type: "spring", damping: 26, stiffness: 300 }}
         className="relative rounded-t-2xl flex flex-col"
         style={{
           width: "100%",
-          maxHeight: "90vh",
+          maxHeight: "85vh",
           background: "#161820",
           border: "1px solid #252836",
           boxShadow: "0 -12px 40px rgba(0,0,0,0.5)",
         }}
       >
-        {/* Header */}
+        {/* Header — fixed top */}
         <div
-          className="flex items-center justify-between px-6 py-4"
+          className="flex items-center justify-between px-5 py-3 flex-shrink-0"
           style={{ borderBottom: "1px solid #252836" }}
         >
           <div>
@@ -84,15 +85,17 @@ export function NewTaskDialog() {
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-6 py-5 flex flex-col gap-5">
+        {/* Body — scrollable, min-height:0 is the key CSS fix for flex overflow */}
+        <div
+          className="px-5 py-4 flex-1 flex flex-col gap-4"
+          style={{ overflowY: "auto", minHeight: 0, WebkitOverflowScrolling: "touch" }}
+        >
           {/* Task name */}
           <div>
             <label style={{ fontSize: 13, color: "#8B8FA8", display: "block", marginBottom: 6 }}>
               任务名称 <span style={{ color: "#EF4444" }}>*</span>
             </label>
             <input
-              autoFocus
               value={name}
               onChange={(e) => {
                 setName(e.target.value);
@@ -106,8 +109,6 @@ export function NewTaskDialog() {
                 color: "#E8EAF0",
                 fontSize: 14,
               }}
-              onFocus={(e) => (e.target.style.borderColor = "#4F7FFF")}
-              onBlur={(e) => (e.target.style.borderColor = error ? "#EF4444" : "#252836")}
             />
             {error && (
               <p style={{ fontSize: 12, color: "#EF4444", marginTop: 4 }}>{error}</p>
@@ -131,8 +132,6 @@ export function NewTaskDialog() {
                 color: "#E8EAF0",
                 fontSize: 14,
               }}
-              onFocus={(e) => (e.target.style.borderColor = "#4F7FFF")}
-              onBlur={(e) => (e.target.style.borderColor = "#252836")}
             />
           </div>
 
@@ -141,7 +140,7 @@ export function NewTaskDialog() {
             <label style={{ fontSize: 13, color: "#8B8FA8", display: "block", marginBottom: 6 }}>
               预计时间（分钟）
             </label>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 type="number"
                 min={1}
@@ -150,35 +149,31 @@ export function NewTaskDialog() {
                   const v = e.target.value;
                   setEstimatedMinutes(v ? parseInt(v, 10) : undefined);
                 }}
-                placeholder="输入预计时间..."
-                className="w-24 rounded-lg px-3 py-2.5 outline-none transition-colors"
+                placeholder="自定义"
+                className="w-20 rounded-lg px-3 py-2 outline-none transition-colors"
                 style={{
                   background: "#0B0D14",
                   border: "1px solid #252836",
                   color: "#E8EAF0",
                   fontSize: 14,
                 }}
-                onFocus={(e) => (e.target.style.borderColor = "#4F7FFF")}
-                onBlur={(e) => (e.target.style.borderColor = "#252836")}
               />
-              <div className="flex flex-wrap gap-1.5">
-                {[15, 30, 45, 60, 90, 120].map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setEstimatedMinutes(m)}
-                    className="px-2 py-1 rounded-md transition-all text-xs"
-                    style={{
-                      background: estimatedMinutes === m ? "rgba(79,127,255,0.15)" : "#1A1D29",
-                      border: `1px solid ${estimatedMinutes === m ? "#4F7FFF" : "#252836"}`,
-                      color: estimatedMinutes === m ? "#4F7FFF" : "#8B8FA8",
-                      fontWeight: estimatedMinutes === m ? 600 : 400,
-                    }}
-                  >
-                    {m >= 60 ? `${m / 60}h` : `${m}m`}
-                  </button>
-                ))}
-              </div>
+              {[15, 30, 45, 60, 90, 120].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setEstimatedMinutes(m)}
+                  className="px-2.5 py-1 rounded-md transition-all text-xs"
+                  style={{
+                    background: estimatedMinutes === m ? "rgba(79,127,255,0.15)" : "#1A1D29",
+                    border: `1px solid ${estimatedMinutes === m ? "#4F7FFF" : "#252836"}`,
+                    color: estimatedMinutes === m ? "#4F7FFF" : "#8B8FA8",
+                    fontWeight: estimatedMinutes === m ? 600 : 400,
+                  }}
+                >
+                  {m >= 60 ? `${m / 60}h` : `${m}m`}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -186,7 +181,6 @@ export function NewTaskDialog() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <label style={{ fontSize: 13, color: "#8B8FA8" }}>定性标签</label>
-              <span style={{ fontSize: 11, color: "#525675" }}>五选一</span>
             </div>
             <div className="flex flex-wrap gap-2">
               {CATEGORIES.map((cat) => (
@@ -216,7 +210,6 @@ export function NewTaskDialog() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <label style={{ fontSize: 13, color: "#8B8FA8" }}>评估标签</label>
-              <span style={{ fontSize: 11, color: "#525675" }}>四选一</span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               {EVAL_TAGS.map((et) => (
@@ -250,7 +243,7 @@ export function NewTaskDialog() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <label style={{ fontSize: 13, color: "#8B8FA8" }}>自定义标签</label>
-              <span style={{ fontSize: 11, color: "#525675" }}>多选，回车添加</span>
+              <span style={{ fontSize: 11, color: "#525675" }}>回车添加</span>
             </div>
             <div
               className="flex items-center flex-wrap gap-1.5 px-3 py-2 rounded-lg min-h-10"
@@ -289,34 +282,7 @@ export function NewTaskDialog() {
           </div>
         </div>
 
-        {/* Footer */}
-        <div
-          className="flex items-center justify-between px-6 py-4"
-          style={{ borderTop: "1px solid #252836" }}
-        >
-          {/* Tag preview */}
-          <div className="flex items-center gap-2">
-            <span
-              className="px-2 py-0.5 rounded-md"
-              style={{ background: selectedCat.bg, color: selectedCat.color, fontSize: 12, fontWeight: 600 }}
-            >
-              {selectedCat.name}
-            </span>
-            <span
-              className="px-2 py-0.5 rounded-md"
-              style={{ background: selectedEval.bg, color: selectedEval.color, fontSize: 12 }}
-            >
-              {selectedEval.label}
-            </span>
-            {estimatedMinutes && estimatedMinutes > 0 && (
-              <span
-                className="px-2 py-0.5 rounded-md"
-                style={{ background: "rgba(6,182,212,0.12)", color: "#06B6D4", fontSize: 12 }}
-              >
-                ≈{estimatedMinutes >= 60 ? `${Math.floor(estimatedMinutes / 60)}h${estimatedMinutes % 60 > 0 ? `${estimatedMinutes % 60}m` : ""}` : `${estimatedMinutes}m`}
-              </span>
-            )}
-          </div>
+        {/* Footer — single fixed bottom bar */}
         <div
           className="flex items-center justify-between px-5 py-3 flex-shrink-0"
           style={{
@@ -324,27 +290,26 @@ export function NewTaskDialog() {
             paddingBottom: "max(12px, env(safe-area-inset-bottom))",
           }}
         >
-            <button
-              onClick={() => setShowNewTaskDialog(false)}
-              className="px-4 py-2 rounded-lg transition-colors"
-              style={{ background: "#252836", color: "#8B8FA8", fontSize: 13 }}
-            >
-              取消
-            </button>
-            <button
-              onClick={handleSubmit}
-              className="flex items-center gap-1.5 px-5 py-2 rounded-lg transition-opacity hover:opacity-90"
-              style={{
-                background: "linear-gradient(135deg, #4F7FFF, #A855F7)",
-                color: "#fff",
-                fontSize: 13,
-                fontWeight: 600,
-              }}
-            >
-              <Plus size={15} />
-              开始计时
-            </button>
-          </div>
+          <button
+            onClick={() => setShowNewTaskDialog(false)}
+            className="px-4 py-2.5 rounded-lg transition-colors"
+            style={{ background: "#252836", color: "#8B8FA8", fontSize: 14 }}
+          >
+            取消
+          </button>
+          <button
+            onClick={handleSubmit}
+            className="flex items-center gap-1.5 px-6 py-2.5 rounded-lg transition-opacity hover:opacity-90"
+            style={{
+              background: "linear-gradient(135deg, #4F7FFF, #A855F7)",
+              color: "#fff",
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            <Plus size={16} />
+            开始计时
+          </button>
         </div>
       </motion.div>
     </div>

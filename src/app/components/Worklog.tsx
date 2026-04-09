@@ -15,13 +15,19 @@ import {
   Clock,
   TrendingUp,
   Calendar,
-  ChevronDown,
   Search,
   Download,
   Target,
   Trash2,
+  Plus,
+  Newspaper,
+  Pencil,
+  X,
+  Check,
+  Flag,
 } from "lucide-react";
-import { useApp, formatDuration, getCategoryInfo, getEvalTagInfo, CATEGORIES, WorkSession } from "../context/AppContext";
+import { useApp, formatDuration, getCategoryInfo, getEvalTagInfo, CATEGORIES, EVAL_TAGS, WorkSession } from "../context/AppContext";
+import { DailyReportDialog } from "./DailyReportDialog";
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
@@ -89,12 +95,217 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
+// ─── Edit Session Dialog ────────────────────────────────────────────────
+function EditSessionDialog({
+  session,
+  onClose,
+}: {
+  session: WorkSession;
+  onClose: () => void;
+}) {
+  const { updateSession } = useApp();
+  const [taskName, setTaskName] = useState(session.taskName);
+  const [category, setCategory] = useState(session.category);
+  const [evalTag, setEvalTag] = useState(session.evalTag || "");
+  const [startVal, setStartVal] = useState(() => {
+    const d = session.startTime;
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  });
+  const [endVal, setEndVal] = useState(() => {
+    const d = session.endTime;
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  });
+  const [feeling, setFeeling] = useState(session.feeling || "");
+  const [outcome, setOutcome] = useState<"completed" | "abandoned" | "">(session.outcome || "");
+
+  function handleSave() {
+    const st = new Date(startVal);
+    const et = new Date(endVal);
+    if (isNaN(st.getTime()) || isNaN(et.getTime()) || et <= st) return;
+    const cat = getCategoryInfo(category);
+    const updated: WorkSession = {
+      ...session,
+      taskName: taskName.trim() || session.taskName,
+      category,
+      evalTag: evalTag || undefined,
+      color: cat.color,
+      startTime: st,
+      endTime: et,
+      duration: Math.round((et.getTime() - st.getTime()) / 1000),
+      feeling: feeling.trim() || undefined,
+      outcome: outcome || undefined,
+    };
+    updateSession(updated);
+    onClose();
+  }
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    background: "#0B0D14",
+    border: "1px solid #252836",
+    borderRadius: 8,
+    padding: "8px 12px",
+    color: "#E8EAF0",
+    fontSize: 13,
+    outline: "none",
+  };
+  const labelStyle: React.CSSProperties = { fontSize: 12, color: "#8B8FA8", marginBottom: 6, display: "block" };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col justify-end"
+      style={{ background: "rgba(0,0,0,0.65)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        className="rounded-t-2xl overflow-auto"
+        style={{ background: "#161820", border: "1px solid #252836", maxHeight: "85vh", paddingBottom: "max(16px,env(safe-area-inset-bottom))" }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: "1px solid #252836" }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "#E8EAF0" }}>编辑记录</span>
+          <button onClick={onClose} style={{ color: "#8B8FA8" }}><X size={16} /></button>
+        </div>
+        <div className="px-5 py-4 flex flex-col gap-4">
+          {/* Task Name */}
+          <div>
+            <label style={labelStyle}>任务名称</label>
+            <input
+              value={taskName}
+              onChange={(e) => setTaskName(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
+          {/* Category */}
+          <div>
+            <label style={labelStyle}>定性标签</label>
+            <div className="flex gap-2 flex-wrap">
+              {CATEGORIES.map((c) => (
+                <button
+                  key={c.name}
+                  onClick={() => setCategory(c.name)}
+                  className="px-3 py-1 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background: category === c.name ? c.bg : "#1A1D29",
+                    color: category === c.name ? c.color : "#8B8FA8",
+                    border: `1px solid ${category === c.name ? c.color + "44" : "transparent"}`,
+                  }}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Eval Tag */}
+          <div>
+            <label style={labelStyle}>评估标签 <span style={{ color: "#525675" }}>（可选）</span></label>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setEvalTag("")}
+                className="px-3 py-1 rounded-lg text-xs font-semibold transition-all"
+                style={{
+                  background: evalTag === "" ? "#252836" : "#1A1D29",
+                  color: evalTag === "" ? "#E8EAF0" : "#8B8FA8",
+                }}
+              >
+                无
+              </button>
+              {EVAL_TAGS.map((e) => (
+                <button
+                  key={e.label}
+                  onClick={() => setEvalTag(e.label)}
+                  className="px-3 py-1 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background: evalTag === e.label ? e.bg : "#1A1D29",
+                    color: evalTag === e.label ? e.color : "#8B8FA8",
+                    border: `1px solid ${evalTag === e.label ? e.color + "44" : "transparent"}`,
+                  }}
+                >
+                  {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Times */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label style={labelStyle}>开始时间</label>
+              <input type="datetime-local" value={startVal} onChange={(e) => setStartVal(e.target.value)} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>结束时间</label>
+              <input type="datetime-local" value={endVal} onChange={(e) => setEndVal(e.target.value)} style={inputStyle} />
+            </div>
+          </div>
+          {/* Outcome */}
+          <div>
+            <label style={labelStyle}>完成结果</label>
+            <div className="flex gap-2">
+              {(["", "completed", "abandoned"] as const).map((o) => {
+                const labels: Record<string, string> = { "": "未标记", completed: "已完成", abandoned: "已放弃" };
+                const colors: Record<string, string> = { "": "#8B8FA8", completed: "#10B981", abandoned: "#F59E0B" };
+                return (
+                  <button
+                    key={o}
+                    onClick={() => setOutcome(o)}
+                    className="px-3 py-1 rounded-lg text-xs font-semibold transition-all"
+                    style={{
+                      background: outcome === o ? `${colors[o]}22` : "#1A1D29",
+                      color: outcome === o ? colors[o] : "#525675",
+                      border: `1px solid ${outcome === o ? colors[o] + "44" : "transparent"}`,
+                    }}
+                  >
+                    {labels[o]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {/* Feeling */}
+          <div>
+            <label style={labelStyle}>感受备注</label>
+            <textarea
+              value={feeling}
+              onChange={(e) => setFeeling(e.target.value)}
+              rows={2}
+              placeholder="记录一下..."
+              style={{ ...inputStyle, resize: "none" }}
+            />
+          </div>
+        </div>
+        {/* Footer */}
+        <div className="flex gap-3 px-5 pb-2">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg py-2.5"
+            style={{ background: "#252836", color: "#8B8FA8", fontSize: 14, fontWeight: 600 }}
+          >
+            取消
+          </button>
+          <button
+            onClick={handleSave}
+            className="flex-1 flex items-center justify-center gap-2 rounded-lg py-2.5"
+            style={{ background: "linear-gradient(135deg,#4F7FFF,#A855F7)", color: "#fff", fontSize: 14, fontWeight: 600 }}
+          >
+            <Check size={14} />
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Worklog() {
-  const { sessions, exportToCSV, deleteSession } = useApp();
+  const { sessions, exportToCSV, deleteSession, setShowManualSessionDialog, clearAllData } = useApp();
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [dateFilter, setDateFilter] = useState("今天");
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("全部");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingSession, setEditingSession] = useState<WorkSession | null>(null);
+  const [showDailyReport, setShowDailyReport] = useState(false);
+  const [chartMode, setChartMode] = useState<"category" | "eval">("category");
 
   // Filter sessions
   const filteredSessions = useMemo(() => {
@@ -116,6 +327,9 @@ export function Worklog() {
 
   // Stats
   const totalTime = filteredSessions.reduce((s, sess) => s + sess.duration, 0);
+  const productiveTime = filteredSessions
+    .filter((s) => s.category === "工作" || s.category === "学习")
+    .reduce((s, sess) => s + sess.duration, 0);
   const sessionCount = filteredSessions.length;
   const avgTime = sessionCount > 0 ? Math.round(totalTime / sessionCount) : 0;
 
@@ -133,22 +347,28 @@ export function Worklog() {
     })).sort((a, b) => b.minutes - a.minutes);
   }, [filteredSessions]);
 
-  // Bar chart data (hourly)
+  // Bar chart data (hourly, stacked by category or eval tag)
   const hourlyData = useMemo(() => {
-    const hours: { hour: string; minutes: number }[] = [];
-    for (let i = 8; i <= 20; i++) {
-      const hourSessions = filteredSessions.filter(
-        (s) => s.startTime.getHours() === i || s.endTime.getHours() === i
-      );
-      const total = hourSessions.reduce((sum, s) => {
-        const start = Math.max(s.startTime.getHours() * 60 + s.startTime.getMinutes(), i * 60);
-        const end = Math.min(s.endTime.getHours() * 60 + s.endTime.getMinutes(), (i + 1) * 60);
-        return sum + Math.max(0, end - start);
-      }, 0);
-      hours.push({ hour: `${i}:00`, minutes: Math.round(total) });
+    const hours = [];
+    for (let i = 0; i <= 23; i++) {
+      const entry: Record<string, any> = { hour: `${i}` };
+      const keys = chartMode === "category"
+        ? CATEGORIES.map((c) => c.name)
+        : ["必须/有意义", "必须/没意义", "不必须/有意义", "不必须/没意义"];
+      for (const key of keys) {
+        const secs = filteredSessions
+          .filter((s) => chartMode === "category" ? s.category === key : s.evalTag === key)
+          .reduce((sum, s) => {
+            const start = Math.max(s.startTime.getHours() * 60 + s.startTime.getMinutes(), i * 60);
+            const end = Math.min(s.endTime.getHours() * 60 + s.endTime.getMinutes(), (i + 1) * 60);
+            return sum + Math.max(0, end - start);
+          }, 0);
+        entry[key] = Math.round(secs);
+      }
+      hours.push(entry);
     }
     return hours;
-  }, [filteredSessions]);
+  }, [filteredSessions, chartMode]);
 
   // Group by date
   const grouped = useMemo(() => {
@@ -166,7 +386,7 @@ export function Worklog() {
   return (
     <div className="p-6 max-w-5xl mx-auto">
       {/* Page header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col gap-3 mb-6">
         <div>
           <h1
             className="flex items-center gap-2"
@@ -180,51 +400,148 @@ export function Worklog() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Date filter */}
+          <div
+            className="flex gap-1 p-1 rounded-lg"
+            style={{ background: "#161820", border: "1px solid #252836" }}
+          >
+            {["今天", "昨天", "全部"].map((f) => (
+              <button
+                key={f}
+                onClick={() => setDateFilter(f)}
+                className="px-3 py-1.5 rounded-md text-sm transition-all"
+                style={{
+                  background: dateFilter === f ? "#252836" : "transparent",
+                  color: dateFilter === f ? "#E8EAF0" : "#8B8FA8",
+                  fontWeight: dateFilter === f ? 600 : 400,
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1" />
+
+          {/* Manual Add */}
+          <button
+            onClick={() => setShowManualSessionDialog(true)}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors"
+            style={{
+              background: "linear-gradient(135deg, #4F7FFF, #A855F7)",
+              color: "#fff",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <Plus size={14} />
+            手动记录
+          </button>
+
+          {/* Daily Report */}
+          <button
+            onClick={() => setShowDailyReport(true)}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors"
+            style={{
+              background: "rgba(79,127,255,0.12)",
+              color: "#4F7FFF",
+              border: "1px solid rgba(79,127,255,0.2)",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+            title="生成日报"
+          >
+            <Newspaper size={14} />
+            日报
+          </button>
+
           {/* CSV Export */}
           <button
             onClick={exportToCSV}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 transition-colors"
+            className="flex items-center justify-center rounded-lg"
             style={{
+              width: 32,
+              height: 32,
               background: "rgba(16,185,129,0.12)",
               color: "#10B981",
-              fontSize: 13,
-              fontWeight: 600,
               border: "1px solid rgba(16,185,129,0.2)",
             }}
+            title="导出 CSV"
           >
             <Download size={14} />
-            导出 CSV
           </button>
 
-          {/* Date filter */}
-        <div
-          className="flex gap-1 p-1 rounded-lg"
-          style={{ background: "#161820", border: "1px solid #252836" }}
-        >
-          {["今天", "昨天", "全部"].map((f) => (
-            <button
-              key={f}
-              onClick={() => setDateFilter(f)}
-              className="px-3 py-1.5 rounded-md text-sm transition-all"
-              style={{
-                background: dateFilter === f ? "#252836" : "transparent",
-                color: dateFilter === f ? "#E8EAF0" : "#8B8FA8",
-                fontWeight: dateFilter === f ? 600 : 400,
-              }}
-            >
-              {f}
-            </button>
-          ))}
-          </div>
+          {/* Clear All Data */}
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="flex items-center justify-center rounded-lg"
+            style={{
+              width: 32,
+              height: 32,
+              background: "rgba(239,68,68,0.10)",
+              color: "#EF4444",
+              border: "1px solid rgba(239,68,68,0.2)",
+            }}
+            title="清空所有数据"
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
+
+      {/* Edit Session Dialog */}
+      {editingSession && (
+        <EditSessionDialog
+          session={editingSession}
+          onClose={() => setEditingSession(null)}
+        />
+      )}
+
+      {/* Clear Confirm Dialog */}
+      {showClearConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.6)" }}
+          onClick={() => setShowClearConfirm(false)}
+        >
+          <div
+            className="rounded-2xl p-6 mx-4"
+            style={{ background: "#161820", border: "1px solid #EF444455", maxWidth: 320, width: "100%" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p style={{ fontSize: 16, fontWeight: 700, color: "#E8EAF0", marginBottom: 8 }}>清空所有数据？</p>
+            <p style={{ fontSize: 13, color: "#8B8FA8", marginBottom: 20 }}>
+              将删除所有任务、记录和待办事项，且无法恢复。
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 rounded-lg py-2.5"
+                style={{ background: "#252836", color: "#C4C8E0", fontSize: 14, fontWeight: 600 }}
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  await clearAllData();
+                  setShowClearConfirm(false);
+                }}
+                className="flex-1 rounded-lg py-2.5"
+                style={{ background: "#EF444422", color: "#EF4444", border: "1px solid #EF444444", fontSize: 14, fontWeight: 600 }}
+              >
+                确认清空
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Stat cards - horizontal scroll on mobile */}
       <div className="flex gap-3 mb-4 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
         <StatCard
-          label="总工时"
-          value={`${Math.floor(totalTime / 3600)}h ${Math.floor((totalTime % 3600) / 60)}m`}
+          label="学习/工作"
+          value={`${Math.floor(productiveTime / 3600)}h ${Math.floor((productiveTime % 3600) / 60)}m`}
           sub={`${sessionCount} 条记录`}
           color="#4F7FFF"
           icon={Clock}
@@ -253,11 +570,32 @@ export function Worklog() {
             className="rounded-xl p-4"
             style={{ background: "#161820", border: "1px solid #252836" }}
           >
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: "#E8EAF0", marginBottom: 12 }}>
-              时间分布
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: "#E8EAF0" }}>
+                时间分布
+              </h3>
+              <div
+                className="flex gap-1 p-0.5 rounded-lg"
+                style={{ background: "#0B0D14", border: "1px solid #252836" }}
+              >
+                {(["category", "eval"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setChartMode(mode)}
+                    className="px-2.5 py-1 rounded-md text-xs transition-all"
+                    style={{
+                      background: chartMode === mode ? "#252836" : "transparent",
+                      color: chartMode === mode ? "#E8EAF0" : "#8B8FA8",
+                      fontWeight: chartMode === mode ? 600 : 400,
+                    }}
+                  >
+                    {mode === "category" ? "定性" : "评估"}
+                  </button>
+                ))}
+              </div>
+            </div>
             <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={hourlyData} barSize={14}>
+              <BarChart data={hourlyData} barSize={14} stackOffset="none">
                 <XAxis
                   dataKey="hour"
                   tick={{ fill: "#8B8FA8", fontSize: 10 }}
@@ -266,16 +604,28 @@ export function Worklog() {
                 />
                 <YAxis hide />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="minutes" radius={[3, 3, 0, 0]}>
-                  {hourlyData.map((entry, i) => (
-                    <Cell
-                      key={i}
-                      fill={entry.minutes > 30 ? "#4F7FFF" : "#252836"}
-                    />
-                  ))}
-                </Bar>
+                {chartMode === "category"
+                  ? CATEGORIES.map((c) => (
+                      <Bar key={c.name} dataKey={c.name} stackId="a" fill={c.color} radius={[0,0,0,0]} />
+                    ))
+                  : ["必须/有意义", "必须/没意义", "不必须/有意义", "不必须/没意义"].map((label) => {
+                      const info = getEvalTagInfo(label);
+                      return (
+                        <Bar key={label} dataKey={label} stackId="a" fill={info?.color ?? "#525675"} radius={[0,0,0,0]} />
+                      );
+                    })
+                }
               </BarChart>
             </ResponsiveContainer>
+            {/* Legend */}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+              {(chartMode === "category" ? CATEGORIES : ["必须/有意义", "必须/没意义", "不必须/有意义", "不必须/没意义"].map((l) => ({ name: l, color: getEvalTagInfo(l)?.color ?? "#525675" }))).map((item) => (
+                <div key={item.name} className="flex items-center gap-1">
+                  <span className="rounded-sm" style={{ width: 8, height: 8, background: item.color, display: "inline-block" }} />
+                  <span style={{ fontSize: 10, color: "#8B8FA8" }}>{item.name}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Filters */}
@@ -365,6 +715,15 @@ export function Worklog() {
                             </p>
                             {/* Tag row */}
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                              {session.outcome === "abandoned" && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-xs flex items-center gap-1"
+                                  style={{ background: "rgba(245,158,11,0.12)", color: "#F59E0B" }}
+                                >
+                                  <Flag size={9} />
+                                  放弃
+                                </span>
+                              )}
                               {session.evalTag && (() => {
                                 const ei = getEvalTagInfo(session.evalTag);
                                 return ei ? (
@@ -427,22 +786,35 @@ export function Worklog() {
                               {session.category}
                             </span>
                           </div>
-                          {/* Delete button */}
-                          <button
-                            onClick={() => setConfirmDeleteId(
-                              confirmDeleteId === session.id ? null : session.id
-                            )}
-                            className="flex items-center justify-center rounded-lg transition-all opacity-0 group-hover:opacity-100 flex-shrink-0"
-                            style={{
-                              width: 30,
-                              height: 30,
-                              background: confirmDeleteId === session.id ? "rgba(239,68,68,0.15)" : "#1A1D29",
-                              color: confirmDeleteId === session.id ? "#EF4444" : "#525675",
-                            }}
-                            title="删除记录"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {/* Action buttons */}
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0">
+                            <button
+                              onClick={() => setEditingSession(session)}
+                              className="flex items-center justify-center rounded-lg transition-all"
+                              style={{
+                                width: 30, height: 30,
+                                background: "#1A1D29",
+                                color: "#525675",
+                              }}
+                              title="编辑记录"
+                            >
+                              <Pencil size={13} />
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(
+                                confirmDeleteId === session.id ? null : session.id
+                              )}
+                              className="flex items-center justify-center rounded-lg transition-all"
+                              style={{
+                                width: 30, height: 30,
+                                background: confirmDeleteId === session.id ? "rgba(239,68,68,0.15)" : "#1A1D29",
+                                color: confirmDeleteId === session.id ? "#EF4444" : "#525675",
+                              }}
+                              title="删除记录"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </div>
                         {/* Delete confirmation */}
                         {confirmDeleteId === session.id && (
@@ -485,6 +857,14 @@ export function Worklog() {
             )}
           </div>
         </div>
+
+        {/* Daily Report Dialog */}
+        <DailyReportDialog
+          open={showDailyReport}
+          onClose={() => setShowDailyReport(false)}
+          sessions={filteredSessions}
+          date={dateFilter === "昨天" ? (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d; })() : new Date()}
+        />
 
         {/* Right: Category breakdown */}
         <div className="flex flex-col gap-4">

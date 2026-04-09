@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "timebox-dev",
+      "runtimeExecutable": "/opt/homebrew/opt/node@22/bin/npm",
+      "runtimeArgs": ["--prefix", "/Users/chensihan/Downloads/Download Dashboard Screens", "run", "dev"],
+      "port": 5173
+    },
+    {
+      "name": "timebox-dev2",
+      "runtimeExecutable": "/opt/homebrew/opt/node@22/bin/npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173
+    }
+  ]
+}
