@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Plus, Hash } from "lucide-react";
+import { X, Plus, Hash, Clock } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp, CATEGORIES, EVAL_TAGS } from "../context/AppContext";
 
@@ -13,6 +13,19 @@ export function NewTaskDialog() {
   const [tags, setTags] = useState<string[]>([]);
   const [estimatedMinutes, setEstimatedMinutes] = useState<number | undefined>(undefined);
   const [error, setError] = useState("");
+  const [useCustomStart, setUseCustomStart] = useState(false);
+  // default: 30 min ago, formatted as datetime-local string
+  function defaultCustomStart() {
+    const d = new Date(Date.now() - 30 * 60 * 1000);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  const [customStartISO, setCustomStartISO] = useState(defaultCustomStart);
+  function nowISO() {
+    const d = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
 
   function addTag() {
     const t = tagInput.trim().replace(/^#/, "");
@@ -38,6 +51,7 @@ export function NewTaskDialog() {
       evalTag,
       tags,
       estimatedMinutes: estimatedMinutes && estimatedMinutes > 0 ? estimatedMinutes : undefined,
+      startTime: useCustomStart && customStartISO ? new Date(customStartISO) : undefined,
     });
     setShowNewTaskDialog(false);
   }
@@ -175,6 +189,56 @@ export function NewTaskDialog() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* 提前开始时间 */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="flex items-center gap-1.5" style={{ fontSize: 13, color: "#8B8FA8" }}>
+                <Clock size={13} style={{ color: "#06B6D4" }} />
+                提前开始时间
+              </label>
+              <button
+                type="button"
+                onClick={() => setUseCustomStart((v) => !v)}
+                className="flex items-center rounded-full transition-colors"
+                style={{
+                  width: 36,
+                  height: 20,
+                  background: useCustomStart ? "#06B6D4" : "#252836",
+                  padding: 2,
+                  justifyContent: useCustomStart ? "flex-end" : "flex-start",
+                }}
+              >
+                <span
+                  className="rounded-full"
+                  style={{ width: 16, height: 16, background: "#fff", display: "block" }}
+                />
+              </button>
+            </div>
+            {useCustomStart && (
+              <div>
+                <input
+                  type="datetime-local"
+                  value={customStartISO}
+                  max={nowISO()}
+                  onChange={(e) => setCustomStartISO(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2 outline-none"
+                  style={{
+                    background: "#0B0D14",
+                    border: "1px solid #06B6D4",
+                    color: "#E8EAF0",
+                    fontSize: 13,
+                    colorScheme: "dark",
+                  }}
+                />
+                {customStartISO && (
+                  <p style={{ fontSize: 11, color: "#06B6D4", marginTop: 4 }}>
+                    已计入约 {Math.round((Date.now() - new Date(customStartISO).getTime()) / 60000)} 分钟
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 定性标签 */}

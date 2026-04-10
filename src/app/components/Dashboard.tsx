@@ -9,6 +9,10 @@ import {
   MoreHorizontal,
   Target,
   PictureInPicture2,
+  Moon,
+  Check,
+  Pencil,
+  X,
 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { motion, AnimatePresence } from "motion/react";
@@ -19,9 +23,95 @@ import {
   getEvalTagInfo,
   CATEGORIES,
   Task,
+  SleepSuggestion,
 } from "../context/AppContext";
 
 
+
+function formatSleepTime(ms: number) {
+  const d = new Date(ms);
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}`;
+}
+
+function formatSleepDuration(startMs: number, endMs: number) {
+  const mins = Math.round((endMs - startMs) / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h${m}m` : `${h}h`;
+}
+
+function isYesterday(ms: number) {
+  const d = new Date(ms);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  return d.getDate() === yesterday.getDate() && d.getMonth() === yesterday.getMonth();
+}
+
+function SleepCard({ suggestion }: { suggestion: SleepSuggestion }) {
+  const { confirmSleep, dismissSleep, openManualWithPrefill } = useApp();
+  const startLabel = (isYesterday(suggestion.start) ? "昨晚" : "") + formatSleepTime(suggestion.start);
+  const endLabel = formatSleepTime(suggestion.end);
+  const duration = formatSleepDuration(suggestion.start, suggestion.end);
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96 }}
+      className="rounded-xl px-4 py-3 flex items-center gap-3"
+      style={{
+        background: "rgba(6,182,212,0.07)",
+        border: "1px solid rgba(6,182,212,0.25)",
+      }}
+    >
+      <Moon size={16} style={{ color: "#06B6D4", flexShrink: 0 }} />
+      <div className="flex-1 min-w-0">
+        <p style={{ fontSize: 13, color: "#06B6D4", fontWeight: 600 }}>推测睡眠</p>
+        <p style={{ fontSize: 12, color: "#8B8FA8", marginTop: 1 }}>
+          {startLabel} — {endLabel} · {duration}
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <button
+          onClick={() => confirmSleep(suggestion.id)}
+          className="flex items-center justify-center rounded-lg transition-colors"
+          title="确认"
+          style={{ width: 30, height: 30, background: "rgba(16,185,129,0.15)", color: "#10B981" }}
+        >
+          <Check size={14} />
+        </button>
+        <button
+          onClick={() =>
+            openManualWithPrefill({
+              name: "睡觉",
+              category: "睡觉",
+              startTime: new Date(suggestion.start),
+              endTime: new Date(suggestion.end),
+            })
+          }
+          className="flex items-center justify-center rounded-lg transition-colors"
+          title="修改"
+          style={{ width: 30, height: 30, background: "rgba(79,127,255,0.12)", color: "#4F7FFF" }}
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          onClick={() => dismissSleep(suggestion.id)}
+          className="flex items-center justify-center rounded-lg transition-colors"
+          title="忽略"
+          style={{ width: 30, height: 30, background: "#252836", color: "#525675" }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
 
 function TimerCard({ task }: { task: Task }) {
   const { toggleTimer, setTaskToEnd, setShowEndTaskDialog } = useApp();
@@ -216,7 +306,7 @@ function TimerCard({ task }: { task: Task }) {
 
 
 export function Dashboard() {
-  const { tasks, setShowNewTaskDialog, showFloating } = useApp();
+  const { tasks, setShowNewTaskDialog, showFloating, sleepSuggestions } = useApp();
 
   const runningCount = tasks.filter((t) => t.isRunning).length;
   const pausedCount = tasks.filter((t) => !t.isRunning).length;
@@ -269,6 +359,22 @@ export function Dashboard() {
             </button>
           </div>
         </div>
+
+        {/* Sleep suggestion cards */}
+        {sleepSuggestions.length > 0 && (
+          <div className="mb-4">
+            <p style={{ fontSize: 11, color: "#525675", marginBottom: 8, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
+              待确认
+            </p>
+            <div className="flex flex-col gap-2">
+              <AnimatePresence>
+                {sleepSuggestions.map((s) => (
+                  <SleepCard key={s.id} suggestion={s} />
+                ))}
+              </AnimatePresence>
+            </div>
+          </div>
+        )}
 
         {/* Timer cards - single column for mobile */}
         <div className="flex flex-col gap-3">

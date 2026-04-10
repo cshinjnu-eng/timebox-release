@@ -4,6 +4,10 @@ import {
   CheckCircle2,
   Circle,
   ClipboardList,
+  Archive,
+  ArchiveX,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -23,8 +27,8 @@ function PriorityDot({ priority }: { priority: "high" | "medium" | "low" }) {
   );
 }
 
-function TodoRow({ item }: { item: TodoItem }) {
-  const { toggleTodo } = useApp();
+function TodoRow({ item, showArchive }: { item: TodoItem; showArchive?: boolean }) {
+  const { toggleTodo, archiveTodo, unarchiveTodo } = useApp();
   const cat = getCategoryInfo(item.category);
 
   return (
@@ -32,6 +36,7 @@ function TodoRow({ item }: { item: TodoItem }) {
       layout
       initial={{ opacity: 0, x: -8 }}
       animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 8 }}
       className="flex items-center gap-3 px-4 py-3 rounded-xl"
       style={{ background: "#161820", border: "1px solid #252836" }}
     >
@@ -45,7 +50,7 @@ function TodoRow({ item }: { item: TodoItem }) {
       <span
         className="flex-1 text-sm"
         style={{
-          color: item.completed ? "#525675" : "#C4C8E0",
+          color: item.archived ? "#3A3D50" : item.completed ? "#525675" : "#C4C8E0",
           textDecoration: item.completed ? "line-through" : "none",
         }}
       >
@@ -59,6 +64,27 @@ function TodoRow({ item }: { item: TodoItem }) {
         >
           {item.category}
         </span>
+        {item.archived ? (
+          <button
+            onClick={() => unarchiveTodo(item.id)}
+            title="取消归档"
+            className="rounded-md p-1 transition-colors"
+            style={{ color: "#525675" }}
+          >
+            <ArchiveX size={14} />
+          </button>
+        ) : (
+          showArchive && item.completed && (
+            <button
+              onClick={() => archiveTodo(item.id)}
+              title="归档"
+              className="rounded-md p-1 transition-colors"
+              style={{ color: "#525675" }}
+            >
+              <Archive size={14} />
+            </button>
+          )
+        )}
       </div>
     </motion.div>
   );
@@ -71,17 +97,21 @@ export function TodoPage() {
   const [newText, setNewText] = useState("");
   const [newCategory, setNewCategory] = useState("工作");
   const [newPriority, setNewPriority] = useState<"high" | "medium" | "low">("medium");
+  const [showArchived, setShowArchived] = useState(false);
+
+  const activeTodos = todos.filter((t) => !t.archived);
+  const archivedTodos = todos.filter((t) => t.archived);
 
   const filteredTodos =
     todoFilter === "全部"
-      ? todos
+      ? activeTodos
       : todoFilter === "未完成"
-      ? todos.filter((t) => !t.completed)
+      ? activeTodos.filter((t) => !t.completed)
       : todoFilter === "已完成"
-      ? todos.filter((t) => t.completed)
-      : todos.filter((t) => t.category === todoFilter);
+      ? activeTodos.filter((t) => t.completed)
+      : activeTodos.filter((t) => t.category === todoFilter);
 
-  const completedCount = todos.filter((t) => t.completed).length;
+  const completedCount = activeTodos.filter((t) => t.completed).length;
 
   function handleAdd() {
     if (!newText.trim()) return;
@@ -104,7 +134,7 @@ export function TodoPage() {
               待办事项
             </h1>
             <p style={{ fontSize: 13, color: "#8B8FA8", marginTop: 2 }}>
-              {completedCount}/{todos.length} 已完成
+              {completedCount}/{activeTodos.length} 已完成
             </p>
           </div>
           <button
@@ -128,7 +158,7 @@ export function TodoPage() {
             className="rounded-full"
             style={{
               height: "100%",
-              width: `${todos.length > 0 ? (completedCount / todos.length) * 100 : 0}%`,
+              width: `${activeTodos.length > 0 ? (completedCount / activeTodos.length) * 100 : 0}%`,
               background: "linear-gradient(90deg, #4F7FFF, #10B981)",
               transition: "width 0.3s ease",
             }}
@@ -220,7 +250,7 @@ export function TodoPage() {
         <div className="flex flex-col gap-2">
           <AnimatePresence>
             {filteredTodos.map((item) => (
-              <TodoRow key={item.id} item={item} />
+              <TodoRow key={item.id} item={item} showArchive />
             ))}
           </AnimatePresence>
         </div>
@@ -239,6 +269,35 @@ export function TodoPage() {
             >
               + 添加待办
             </button>
+          </div>
+        )}
+
+        {/* Archived section */}
+        {archivedTodos.length > 0 && (
+          <div className="mt-6">
+            <button
+              onClick={() => setShowArchived(!showArchived)}
+              className="flex items-center gap-2 w-full px-2 py-2 rounded-lg transition-colors"
+              style={{ color: "#525675", fontSize: 13 }}
+            >
+              {showArchived ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              <Archive size={13} />
+              <span>已归档 ({archivedTodos.length})</span>
+            </button>
+            <AnimatePresence>
+              {showArchived && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="flex flex-col gap-2 mt-2 overflow-hidden"
+                >
+                  {archivedTodos.map((item) => (
+                    <TodoRow key={item.id} item={item} />
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
       </div>

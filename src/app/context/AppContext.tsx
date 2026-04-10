@@ -66,6 +66,13 @@ export interface TodoItem {
   completed: boolean;
   priority: "high" | "medium" | "low";
   category: string;
+  archived?: boolean;
+}
+
+export interface SleepSuggestion {
+  id: string;    // `sleep_${start}`
+  start: number; // ms
+  end: number;   // ms
 }
 
 export interface WorkSession {
@@ -94,6 +101,7 @@ interface AppContextType {
     evalTag?: string;
     tags: string[];
     estimatedMinutes?: number;
+    startTime?: Date;
   }) => void;
   endTask: (id: string, feeling?: string, outcome?: "completed" | "abandoned") => void;
   updateSession: (session: WorkSession) => void;
@@ -112,6 +120,11 @@ interface AppContextType {
   toggleTimer: (id: string) => void;
   toggleTodo: (id: string) => void;
   addTodo: (text: string, category: string, priority: "high" | "medium" | "low") => void;
+  archiveTodo: (id: string) => void;
+  unarchiveTodo: (id: string) => void;
+  sleepSuggestions: SleepSuggestion[];
+  confirmSleep: (id: string) => void;
+  dismissSleep: (id: string) => void;
   showFloating: () => void;
   showNewTaskDialog: boolean;
   setShowNewTaskDialog: (v: boolean) => void;
@@ -119,6 +132,8 @@ interface AppContextType {
   setShowEndTaskDialog: (v: boolean) => void;
   showManualSessionDialog: boolean;
   setShowManualSessionDialog: (v: boolean) => void;
+  manualPrefill: { name: string; category: string; startTime: Date; endTime: Date } | null;
+  openManualWithPrefill: (prefill: { name: string; category: string; startTime: Date; endTime: Date }) => void;
   taskToEnd: Task | null;
   setTaskToEnd: (t: Task | null) => void;
 }
@@ -221,6 +236,7 @@ function todoToEvent(t: TodoItem): EventRecord {
       completed: t.completed,
       priority: t.priority,
       category: t.category,
+      archived: t.archived ?? false,
     },
   };
 }
@@ -233,6 +249,7 @@ function eventToTodo(e: EventRecord): TodoItem {
     completed: d.completed ?? false,
     priority: d.priority || "medium",
     category: d.category || "工作",
+    archived: d.archived ?? false,
   };
 }
 
@@ -240,11 +257,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
   const [todos, setTodos] = useState<TodoItem[]>(INITIAL_TODOS);
   const [sessions, setSessions] = useState<WorkSession[]>(INITIAL_SESSIONS);
+  const [sleepSuggestions, setSleepSuggestions] = useState<SleepSuggestion[]>([]);
   const [showNewTaskDialog, setShowNewTaskDialog] = useState(false);
   const [showEndTaskDialog, setShowEndTaskDialog] = useState(false);
   const [showManualSessionDialog, setShowManualSessionDialog] = useState(false);
   const [taskToEnd, setTaskToEnd] = useState<Task | null>(null);
   const [dbReady, setDbReady] = useState(false);
+  const [manualPrefill, setManualPrefill] = useState<{ name: string; category: string; startTime: Date; endTime: Date } | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -301,7 +320,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {
           console.warn("[Native Sync] Failed to get status", e);
         }
-        // 启动悬浮窗（不管服务是否在运行，都尝试为正在计时的任务启动）
+        // 启动悬浮窗
         const running = tasksRef.current.filter((t) => t.isRunning);
         running.forEach((t) => {
           FloatingWindow.startFloating({
@@ -311,6 +330,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             color: t.color,
           });
         });
+
+        // 自动检测睡眠
+        try {
+          const now = Date.now();
+          const yesterday0 = new Date(); yesterday0.setDate(yesterday0.getDate() - 1); yesterday0.setHours(0,0,0,0);
+          const usageRes = await FloatingWindow.getUsageEvents({ startTime: yesterday0.getTime(), endTime: now });
+          const uSessions: Array<{start: number; end: number}> = usageRes.sessions || [];
+          if (uSessions.length > 0) {
+            const sorted = [...uSessions].sort((a, b) => a.start - b.start);
+            const gaps: SleepSuggestion[] = [];
+            const SLEEP_GAP = 4.5 * 3600 * 1000;
+            // gap before first session
+            const dayStart = yesterday0.getTime();
+            if (sorted[0].start - dayStart >= SLEEP_GAP) {
+              gaps.push({ id: `sleep_${dayStart}`, start: dayStart, end: sorted[0].start });
+            }
+            for (let i = 0; i < sorted.length - 1; i++) {
+              const gap = sorted[i + 1].start - sorted[i].end;
+              if (gap >= SLEEP_GAP) {
+                gaps.push({ id: `sleep_${sorted[i].end}`, start: sorted[i].end, end: sorted[i + 1].start });
+              }
+            }
+            // filter already-recorded sleep sessions
+            const existingSleep = sessionsRef.current.filter((s) => s.category === "睡觉");
+            const filtered = gaps.filter((g) => {
+              if (localStorage.getItem(`dismissed_sleep_${g.start}`)) return false;
+              return !existingSleep.some((s) => s.startTime.getTime() < g.end && s.endTime.getTime() > g.start);
+            });
+            if (filtered.length > 0) setSleepSuggestions(filtered);
+          }
+        } catch (e) {
+          // usage permission not granted or error, ignore
+        }
       }, 2000);
     }
   }, []);
@@ -318,6 +370,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ─── 持久化同步（每 30s 一次，不依赖 tasks 避免频繁重置） ──────
   const tasksRef = useRef<Task[]>([]);
   tasksRef.current = tasks;
+  const sessionsRef = useRef<WorkSession[]>([]);
+  sessionsRef.current = sessions;
 
   useEffect(() => {
     if (!dbReady) return;
@@ -373,8 +427,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       evalTag?: string;
       tags: string[];
       estimatedMinutes?: number;
+      startTime?: Date;
     }) => {
       const cat = getCategoryInfo(data.category);
+      const customStart = data.startTime;
+      const now = new Date();
+      const taskStart = customStart ?? now;
+      const initialElapsed = customStart
+        ? Math.max(0, Math.floor((Date.now() - customStart.getTime()) / 1000))
+        : 0;
       const newTask: Task = {
         id: makeId(),
         name: data.name,
@@ -383,8 +444,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         evalTag: data.evalTag,
         color: cat.color,
         bgColor: cat.bg,
-        startTime: new Date(),
-        elapsed: 0,
+        startTime: taskStart,
+        elapsed: initialElapsed,
         isRunning: true,
         tags: data.tags,
         estimatedMinutes: data.estimatedMinutes,
@@ -394,7 +455,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (Capacitor.getPlatform() === "android" && FloatingWindow) {
         FloatingWindow.startFloating({
           name: newTask.name,
-          startTime: Date.now(),
+          startTime: Date.now() - initialElapsed * 1000,
           elapsed: 0,
           color: newTask.color,
         });
@@ -480,12 +541,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const addTodo = useCallback(
     (text: string, category: string, priority: "high" | "medium" | "low") => {
-      const newTodo: TodoItem = { id: makeId(), text, completed: false, priority, category };
+      const newTodo: TodoItem = { id: makeId(), text, completed: false, priority, category, archived: false };
       setTodos((prev) => [...prev, newTodo]);
       saveEvent(todoToEvent(newTodo)).catch(console.warn);
     },
     []
   );
+
+  const archiveTodo = useCallback((id: string) => {
+    setTodos((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id === id) {
+          const archived = { ...t, archived: true };
+          saveEvent(todoToEvent(archived)).catch(console.warn);
+          return archived;
+        }
+        return t;
+      });
+      return updated;
+    });
+  }, []);
+
+  const unarchiveTodo = useCallback((id: string) => {
+    setTodos((prev) => {
+      const updated = prev.map((t) => {
+        if (t.id === id) {
+          const unarchived = { ...t, archived: false };
+          saveEvent(todoToEvent(unarchived)).catch(console.warn);
+          return unarchived;
+        }
+        return t;
+      });
+      return updated;
+    });
+  }, []);
+
+  const confirmSleep = useCallback((suggestionId: string) => {
+    setSleepSuggestions((prev) => {
+      const s = prev.find((p) => p.id === suggestionId);
+      if (!s) return prev;
+      const cat = getCategoryInfo("睡觉");
+      const durationSec = Math.round((s.end - s.start) / 1000);
+      const session: WorkSession = {
+        id: makeId(),
+        taskName: "睡觉",
+        category: "睡觉",
+        color: cat.color,
+        startTime: new Date(s.start),
+        endTime: new Date(s.end),
+        duration: durationSec,
+        tags: [],
+      };
+      setSessions((prev2) => [session, ...prev2]);
+      saveEvent(sessionToEvent(session)).catch(console.warn);
+      return prev.filter((p) => p.id !== suggestionId);
+    });
+  }, []);
+
+  const dismissSleep = useCallback((suggestionId: string) => {
+    setSleepSuggestions((prev) => {
+      const s = prev.find((p) => p.id === suggestionId);
+      if (s) localStorage.setItem(`dismissed_sleep_${s.start}`, "1");
+      return prev.filter((p) => p.id !== suggestionId);
+    });
+  }, []);
 
   const exportToCSV = useCallback(() => {
     downloadCSV(sessions);
@@ -550,6 +669,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         toggleTimer,
         toggleTodo,
         addTodo,
+        archiveTodo,
+        unarchiveTodo,
+        sleepSuggestions,
+        confirmSleep,
+        dismissSleep,
         exportToCSV,
         deleteSession: deleteSessionFn,
         updateSession: updateSessionFn,
@@ -573,6 +697,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setShowEndTaskDialog,
         showManualSessionDialog,
         setShowManualSessionDialog,
+        manualPrefill,
+        openManualWithPrefill: (prefill) => {
+          setManualPrefill(prefill);
+          setShowManualSessionDialog(true);
+        },
         taskToEnd,
         setTaskToEnd,
       }}

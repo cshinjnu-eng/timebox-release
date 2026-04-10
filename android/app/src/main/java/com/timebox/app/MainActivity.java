@@ -510,12 +510,7 @@ public class MainActivity extends BridgeActivity {
                 item.put("totalTimeMs", totalTime);
                 item.put("lastUsed", lastUsedMap.getOrDefault(pkg, 0L));
 
-                try {
-                    ApplicationInfo ai = pkgMgr.getApplicationInfo(pkg, 0);
-                    item.put("appName", pkgMgr.getApplicationLabel(ai).toString());
-                } catch (PackageManager.NameNotFoundException e) {
-                    item.put("appName", pkg);
-                }
+                item.put("appName", getAppLabel(pkg, pkgMgr));
                 results.put(item);
             }
 
@@ -574,12 +569,7 @@ public class MainActivity extends BridgeActivity {
                     if (t0 != null && ev.getTimeStamp() - t0 >= 3000) {
                         JSObject s = new JSObject();
                         s.put("packageName", pkg);
-                        try {
-                            ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-                            s.put("appName", pm.getApplicationLabel(ai).toString());
-                        } catch (Exception e) {
-                            s.put("appName", pkg.contains(".") ? pkg.substring(pkg.lastIndexOf('.') + 1) : pkg);
-                        }
+                        s.put("appName", getAppLabel(pkg, pm));
                         s.put("start", t0);
                         s.put("end", ev.getTimeStamp());
                         sessions.put(s);
@@ -594,12 +584,7 @@ public class MainActivity extends BridgeActivity {
                 if (dur >= 3000) {
                     JSObject s = new JSObject();
                     s.put("packageName", e.getKey());
-                    try {
-                        ApplicationInfo ai = pm.getApplicationInfo(e.getKey(), 0);
-                        s.put("appName", pm.getApplicationLabel(ai).toString());
-                    } catch (Exception ex) {
-                        s.put("appName", e.getKey());
-                    }
+                    s.put("appName", getAppLabel(e.getKey(), pm));
                     s.put("start", e.getValue());
                     s.put("end", Math.min(now, endTime));
                     sessions.put(s);
@@ -609,6 +594,64 @@ public class MainActivity extends BridgeActivity {
             JSObject result = new JSObject();
             result.put("sessions", sessions);
             call.resolve(result);
+        }
+
+        // ─── App 名称解析（方案A: QUERY_ALL_PACKAGES + 方案B: 映射表） ──
+        private static final java.util.Map<String, String> APP_NAME_MAP;
+        static {
+            APP_NAME_MAP = new java.util.HashMap<>();
+            APP_NAME_MAP.put("com.tencent.mm", "微信");
+            APP_NAME_MAP.put("com.tencent.mobileqq", "QQ");
+            APP_NAME_MAP.put("com.xingin.xhs", "小红书");
+            APP_NAME_MAP.put("com.ss.android.ugc.aweme", "抖音");
+            APP_NAME_MAP.put("com.zhiliaoapp.musically", "抖音");
+            APP_NAME_MAP.put("com.sina.weibo", "微博");
+            APP_NAME_MAP.put("com.weibo.android", "微博");
+            APP_NAME_MAP.put("tv.danmaku.bili", "哔哩哔哩");
+            APP_NAME_MAP.put("com.bilibili.app.blue", "哔哩哔哩");
+            APP_NAME_MAP.put("com.taobao.taobao", "淘宝");
+            APP_NAME_MAP.put("com.eg.android.AlipayGphone", "支付宝");
+            APP_NAME_MAP.put("com.jingdong.app.mall", "京东");
+            APP_NAME_MAP.put("com.netease.cloudmusic", "网易云音乐");
+            APP_NAME_MAP.put("com.kugou.android", "酷狗音乐");
+            APP_NAME_MAP.put("com.tencent.qqlive", "腾讯视频");
+            APP_NAME_MAP.put("com.iqiyi.video", "爱奇艺");
+            APP_NAME_MAP.put("com.youku.phone", "优酷");
+            APP_NAME_MAP.put("com.baidu.BaiduMap", "百度地图");
+            APP_NAME_MAP.put("com.amap.android.navi", "高德地图");
+            APP_NAME_MAP.put("com.didi.es.activity", "滴滴出行");
+            APP_NAME_MAP.put("com.meituan.mt", "美团");
+            APP_NAME_MAP.put("com.sankuai.meituan.takeoutnew", "美团外卖");
+            APP_NAME_MAP.put("com.eleme.android", "饿了么");
+            APP_NAME_MAP.put("com.pdd.buyer", "拼多多");
+            APP_NAME_MAP.put("com.zhihu.android", "知乎");
+            APP_NAME_MAP.put("com.ss.android.article.news", "今日头条");
+            APP_NAME_MAP.put("com.tencent.news", "腾讯新闻");
+            APP_NAME_MAP.put("com.alibaba.android.rimet", "钉钉");
+            APP_NAME_MAP.put("com.tencent.wework", "企业微信");
+            APP_NAME_MAP.put("com.baidu.searchbox", "百度");
+            APP_NAME_MAP.put("com.UCMobile", "UC浏览器");
+            APP_NAME_MAP.put("com.taptap", "TapTap");
+            APP_NAME_MAP.put("com.wepie.ivy", "蜂巢");
+            APP_NAME_MAP.put("com.hihonor.android.launcher", "桌面");
+            APP_NAME_MAP.put("com.android.settings", "设置");
+            APP_NAME_MAP.put("com.android.packageinstaller", "安装程序");
+            APP_NAME_MAP.put("com.hihonor.photos", "图库");
+            APP_NAME_MAP.put("com.hihonor.camera", "相机");
+            APP_NAME_MAP.put("com.hihonor.filemanager", "文件管理");
+            APP_NAME_MAP.put("com.hihonor.deskclock", "时钟");
+        }
+
+        private String getAppLabel(String pkg, PackageManager pm) {
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                return pm.getApplicationLabel(ai).toString();
+            } catch (PackageManager.NameNotFoundException e) {
+                String mapped = APP_NAME_MAP.get(pkg);
+                if (mapped != null) return mapped;
+                int dot = pkg.lastIndexOf('.');
+                return dot >= 0 ? pkg.substring(dot + 1) : pkg;
+            }
         }
 
         // ─── 内部工具 ──────────────────────────────────────

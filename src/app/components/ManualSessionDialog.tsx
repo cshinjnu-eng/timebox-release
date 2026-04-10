@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, Clock, Tag, MessageSquare } from "lucide-react";
 import { useApp, CATEGORIES, EVAL_TAGS, getCategoryInfo } from "../context/AppContext";
 
@@ -23,7 +23,7 @@ function formatDurationPreview(startStr: string, endStr: string): string {
 }
 
 export function ManualSessionDialog() {
-  const { addManualSession, showManualSessionDialog, setShowManualSessionDialog } = useApp();
+  const { addManualSession, showManualSessionDialog, setShowManualSessionDialog, manualPrefill } = useApp();
 
   const [name, setName] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0].name);
@@ -34,6 +34,19 @@ export function ManualSessionDialog() {
   const [endTime, setEndTime] = useState(toLocalISOString(now));
   const [feeling, setFeeling] = useState("");
   const [tagInput, setTagInput] = useState("");
+
+  // Apply prefill whenever the dialog opens with prefill data
+  useEffect(() => {
+    if (showManualSessionDialog && manualPrefill) {
+      setName(manualPrefill.name);
+      setCategory(manualPrefill.category);
+      setStartTime(toLocalISOString(manualPrefill.startTime));
+      setEndTime(toLocalISOString(manualPrefill.endTime));
+      setEvalTag("");
+      setFeeling("");
+      setTagInput("");
+    }
+  }, [showManualSessionDialog, manualPrefill]);
 
   if (!showManualSessionDialog) return null;
 
