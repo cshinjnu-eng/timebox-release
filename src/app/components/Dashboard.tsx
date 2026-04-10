@@ -13,6 +13,13 @@ import {
   Check,
   Pencil,
   X,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  CheckSquare,
+  Trash2,
+  Boxes,
+  RotateCcw,
 } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { motion, AnimatePresence } from "motion/react";
@@ -24,6 +31,7 @@ import {
   CATEGORIES,
   Task,
   SleepSuggestion,
+  LongTask,
 } from "../context/AppContext";
 
 
@@ -305,6 +313,215 @@ function TimerCard({ task }: { task: Task }) {
 }
 
 
+// ─── 应用桶检测横幅 ────────────────────────────────────────────────────
+function BucketDetectionBanner() {
+  const { bucketDetection, confirmBucketDetection, dismissBucketDetection } = useApp();
+  if (!bucketDetection) return null;
+  const cat = getCategoryInfo(bucketDetection.category);
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className="rounded-xl px-4 py-3 mb-4 flex items-center gap-3"
+      style={{ background: `${bucketDetection.color}12`, border: `1px solid ${bucketDetection.color}40` }}
+    >
+      <Boxes size={16} style={{ color: bucketDetection.color, flexShrink: 0 }} />
+      <div className="flex-1 min-w-0">
+        <p style={{ fontSize: 13, color: bucketDetection.color, fontWeight: 600 }}>
+          检测到「{bucketDetection.bucketName}」
+        </p>
+        <p style={{ fontSize: 11, color: "#8B8FA8", marginTop: 1 }}>
+          已连续使用 {bucketDetection.detectedMinutes} 分钟 · 是否开始计时？
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <button
+          onClick={confirmBucketDetection}
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: bucketDetection.color, color: "#fff" }}
+        >
+          <Check size={12} />
+          确认
+        </button>
+        <button
+          onClick={dismissBucketDetection}
+          className="p-1.5 rounded-lg"
+          style={{ background: "#252836", color: "#525675" }}
+        >
+          <X size={13} />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── 长线任务卡片 ──────────────────────────────────────────────────────
+function LongTaskCard({ task }: { task: LongTask }) {
+  const { toggleLongTask, endLongTask, addCheckpoint, toggleCheckpoint, deleteCheckpoint } = useApp();
+  const [expanded, setExpanded] = useState(false);
+  const [newCp, setNewCp] = useState("");
+  const cat = getCategoryInfo(task.category);
+  const doneCount = task.checkpoints.filter(c => c.completed).length;
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.97 }}
+      className="rounded-xl overflow-hidden"
+      style={{ background: "#161820", border: `1px solid ${task.isRunning ? cat.color + "40" : "#252836"}` }}
+    >
+      {/* Summary row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div
+          className="rounded-full flex-shrink-0"
+          style={{ width: 10, height: 10, background: task.isRunning ? cat.color : "#525675",
+            boxShadow: task.isRunning ? `0 0 6px ${cat.color}88` : "none" }}
+        />
+        <div className="flex-1 min-w-0">
+          <p className="truncate" style={{ fontSize: 14, fontWeight: 600, color: task.isRunning ? "#E8EAF0" : "#8B8FA8" }}>{task.name}</p>
+          <p style={{ fontSize: 11, color: "#525675" }}>
+            {formatElapsed(task.elapsed)}
+            {task.checkpoints.length > 0 && ` · ${doneCount}/${task.checkpoints.length} 打点`}
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Pause/Resume */}
+          <button
+            onClick={() => toggleLongTask(task.id)}
+            className="flex items-center justify-center rounded-lg"
+            style={{ width: 30, height: 30, background: task.isRunning ? "rgba(79,127,255,0.12)" : "rgba(16,185,129,0.12)", color: task.isRunning ? "#4F7FFF" : "#10B981" }}
+          >
+            {task.isRunning ? <Pause size={13} /> : <RotateCcw size={13} />}
+          </button>
+          {/* Stop */}
+          <button
+            onClick={() => endLongTask(task.id)}
+            className="flex items-center justify-center rounded-lg"
+            style={{ width: 30, height: 30, background: "rgba(239,68,68,0.1)", color: "#EF4444" }}
+          >
+            <Square size={12} />
+          </button>
+          {/* Expand */}
+          <button onClick={() => setExpanded(v => !v)} className="p-1 rounded-lg" style={{ color: "#525675" }}>
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+        </div>
+      </div>
+
+      {/* Checkpoint list */}
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="px-4 pb-3" style={{ borderTop: "1px solid #1A1D29" }}>
+              {task.checkpoints.length === 0 && (
+                <p style={{ fontSize: 12, color: "#525675", paddingTop: 10, paddingBottom: 2 }}>
+                  还没有打点记录，添加一个小节点
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5 mt-2">
+                {task.checkpoints.map((cp) => (
+                  <div key={cp.id} className="flex items-center gap-2">
+                    <button onClick={() => toggleCheckpoint(task.id, cp.id)} className="flex-shrink-0">
+                      {cp.completed
+                        ? <CheckSquare size={16} style={{ color: "#10B981" }} />
+                        : <div style={{ width: 16, height: 16, borderRadius: 4, border: "1.5px solid #525675" }} />
+                      }
+                    </button>
+                    <span className="flex-1 text-sm" style={{ color: cp.completed ? "#525675" : "#C4C8E0", textDecoration: cp.completed ? "line-through" : "none" }}>
+                      {cp.text}
+                    </span>
+                    <button onClick={() => deleteCheckpoint(task.id, cp.id)} className="flex-shrink-0 p-1 rounded" style={{ color: "#525675" }}>
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {/* Add checkpoint */}
+              <div className="flex items-center gap-2 mt-3">
+                <input
+                  value={newCp}
+                  onChange={(e) => setNewCp(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newCp.trim()) {
+                      addCheckpoint(task.id, newCp.trim());
+                      setNewCp("");
+                    }
+                  }}
+                  placeholder="添加打点节点..."
+                  className="flex-1 px-3 py-1.5 rounded-lg outline-none text-sm"
+                  style={{ background: "#0B0D14", border: "1px solid #252836", color: "#E8EAF0" }}
+                />
+                <button
+                  onClick={() => { if (newCp.trim()) { addCheckpoint(task.id, newCp.trim()); setNewCp(""); } }}
+                  className="px-3 py-1.5 rounded-lg text-xs"
+                  style={{ background: "rgba(79,127,255,0.12)", color: "#4F7FFF" }}
+                >
+                  添加
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+// ─── 长线任务区块 ──────────────────────────────────────────────────────
+function LongTaskSection() {
+  const { longTasks, setShowNewLongTaskDialog } = useApp();
+  const runningCount = longTasks.filter(t => t.isRunning).length;
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="flex items-center gap-2" style={{ fontSize: 14, fontWeight: 700, color: "#E8EAF0" }}>
+            <Layers size={14} style={{ color: "#A855F7" }} />
+            长线任务
+          </h2>
+          {longTasks.length > 0 && (
+            <p style={{ fontSize: 12, color: "#525675", marginTop: 1 }}>
+              {runningCount} 个进行中 · 点击展开打点记录
+            </p>
+          )}
+        </div>
+        <button
+          onClick={() => setShowNewLongTaskDialog(true)}
+          className="flex items-center gap-1.5 rounded-lg px-3 py-2"
+          style={{ background: "rgba(168,85,247,0.12)", color: "#A855F7", fontSize: 13, fontWeight: 600 }}
+        >
+          <Plus size={14} />
+          新建
+        </button>
+      </div>
+      {longTasks.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <AnimatePresence>
+            {longTasks.map((task) => (
+              <LongTaskCard key={task.id} task={task} />
+            ))}
+          </AnimatePresence>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center py-8 rounded-xl" style={{ border: "1.5px dashed #252836", color: "#8B8FA8" }}>
+          <Layers size={28} style={{ marginBottom: 8, opacity: 0.35 }} />
+          <p style={{ fontSize: 13 }}>还没有长线任务</p>
+          <p style={{ fontSize: 11, color: "#525675", marginTop: 3, textAlign: "center" }}>适合持续多小时的任务，支持打点记录</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Dashboard() {
   const { tasks, setShowNewTaskDialog, showFloating, sleepSuggestions } = useApp();
 
@@ -360,6 +577,11 @@ export function Dashboard() {
           </div>
         </div>
 
+        {/* Bucket detection banner */}
+        <AnimatePresence>
+          <BucketDetectionBanner />
+        </AnimatePresence>
+
         {/* Sleep suggestion cards */}
         {sleepSuggestions.length > 0 && (
           <div className="mb-4">
@@ -401,6 +623,9 @@ export function Dashboard() {
             </button>
           </div>
         )}
+
+        {/* Long tasks section */}
+        <LongTaskSection />
 
         {/* Category summary */}
         {tasks.length > 0 && (

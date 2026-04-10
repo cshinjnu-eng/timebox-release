@@ -49,15 +49,15 @@ export interface Task {
   id: string;
   name: string;
   description?: string;
-  category: string;        // 定性标签
-  evalTag?: string;        // 评估标签
+  category: string;
+  evalTag?: string;
   color: string;
   bgColor: string;
   startTime: Date;
   elapsed: number;         // seconds
   isRunning: boolean;
-  tags: string[];          // 自定义标签
-  estimatedMinutes?: number; // 预计时间（分钟）
+  tags: string[];
+  estimatedMinutes?: number;
 }
 
 export interface TodoItem {
@@ -70,7 +70,7 @@ export interface TodoItem {
 }
 
 export interface SleepSuggestion {
-  id: string;    // `sleep_${start}`
+  id: string;
   start: number; // ms
   end: number;   // ms
 }
@@ -78,18 +78,63 @@ export interface SleepSuggestion {
 export interface WorkSession {
   id: string;
   taskName: string;
-  category: string;        // 定性标签
-  evalTag?: string;        // 评估标签
+  category: string;
+  evalTag?: string;
   color: string;
   startTime: Date;
   endTime: Date;
   duration: number;        // seconds
-  feeling?: string;        // 完成感受
-  tags: string[];          // 自定义标签
-  estimatedMinutes?: number; // 预计时间（分钟）
-  outcome?: "completed" | "abandoned"; // 完成结果
+  feeling?: string;
+  tags: string[];
+  estimatedMinutes?: number;
+  outcome?: "completed" | "abandoned";
 }
 
+// ─── 长线任务 ─────────────────────────────────────────────────────────
+export interface LongTaskCheckpoint {
+  id: string;
+  text: string;
+  completed: boolean;
+  completedAt?: number; // ms timestamp
+}
+
+export interface LongTask {
+  id: string;
+  name: string;
+  description?: string;
+  category: string;
+  evalTag?: string;
+  color: string;
+  bgColor: string;
+  startTime: Date;
+  elapsed: number;       // seconds total (persists across pauses)
+  isRunning: boolean;
+  tags: string[];
+  checkpoints: LongTaskCheckpoint[];
+}
+
+// ─── 应用桶 ───────────────────────────────────────────────────────────
+export interface AppBucket {
+  id: string;
+  name: string;
+  apps: string[];          // app display names matched against getUsageEvents.appName
+  category: string;
+  evalTag?: string;
+  triggerMinutes: number;  // default 5
+  toleranceSeconds: number; // gap tolerance, default 60
+  color: string;
+}
+
+export interface BucketDetection {
+  bucketId: string;
+  bucketName: string;
+  category: string;
+  color: string;
+  detectedMinutes: number;
+  trueStart: number; // ms — actual usage start to backfill
+}
+
+// ─── Context 类型 ──────────────────────────────────────────────────────
 interface AppContextType {
   tasks: Task[];
   todos: TodoItem[];
@@ -126,6 +171,25 @@ interface AppContextType {
   confirmSleep: (id: string) => void;
   dismissSleep: (id: string) => void;
   showFloating: () => void;
+  // Long tasks
+  longTasks: LongTask[];
+  addLongTask: (data: { name: string; description?: string; category: string; evalTag?: string; tags: string[]; startTime?: Date }) => void;
+  endLongTask: (id: string, feeling?: string, outcome?: "completed" | "abandoned") => void;
+  toggleLongTask: (id: string) => void;
+  addCheckpoint: (taskId: string, text: string) => void;
+  toggleCheckpoint: (taskId: string, checkpointId: string) => void;
+  deleteCheckpoint: (taskId: string, checkpointId: string) => void;
+  // App buckets
+  appBuckets: AppBucket[];
+  addBucket: (data: Omit<AppBucket, "id">) => void;
+  updateBucket: (bucket: AppBucket) => void;
+  deleteBucket: (id: string) => void;
+  // Bucket auto-detection
+  bucketDetection: BucketDetection | null;
+  confirmBucketDetection: () => void;
+  dismissBucketDetection: () => void;
+  recentAppNames: string[];
+  // Dialogs
   showNewTaskDialog: boolean;
   setShowNewTaskDialog: (v: boolean) => void;
   showEndTaskDialog: boolean;
@@ -134,6 +198,8 @@ interface AppContextType {
   setShowManualSessionDialog: (v: boolean) => void;
   manualPrefill: { name: string; category: string; startTime: Date; endTime: Date } | null;
   openManualWithPrefill: (prefill: { name: string; category: string; startTime: Date; endTime: Date }) => void;
+  showNewLongTaskDialog: boolean;
+  setShowNewLongTaskDialog: (v: boolean) => void;
   taskToEnd: Task | null;
   setTaskToEnd: (t: Task | null) => void;
 }
@@ -144,11 +210,7 @@ function makeId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-const INITIAL_SESSIONS: WorkSession[] = [];
-const INITIAL_TASKS: Task[] = [];
-const INITIAL_TODOS: TodoItem[] = [];
-
-// ─── IndexedDB 序列化辅助 ─────────────────────────────────────────
+// ─── IndexedDB 序列化辅助 ──────────────────────────────────────────────
 function taskToEvent(task: Task): EventRecord {
   return {
     id: task.id,
@@ -253,83 +315,169 @@ function eventToTodo(e: EventRecord): TodoItem {
   };
 }
 
+function longTaskToEvent(t: LongTask): EventRecord {
+  return {
+    id: t.id,
+    bucketId: "timebox-longtasks",
+    timestamp: t.startTime.toISOString(),
+    duration: t.elapsed,
+    data: {
+      name: t.name,
+      description: t.description,
+      category: t.category,
+      evalTag: t.evalTag,
+      color: t.color,
+      bgColor: t.bgColor,
+      isRunning: t.isRunning,
+      tags: t.tags,
+      checkpoints: t.checkpoints,
+    },
+  };
+}
+
+function eventToLongTask(e: EventRecord): LongTask {
+  const d = e.data as Record<string, any>;
+  return {
+    id: e.id,
+    name: d.name || "",
+    description: d.description,
+    category: d.category || "工作",
+    evalTag: d.evalTag,
+    color: d.color || "#4F7FFF",
+    bgColor: d.bgColor || "rgba(79,127,255,0.15)",
+    startTime: new Date(e.timestamp),
+    elapsed: e.duration,
+    isRunning: d.isRunning ?? false,
+    tags: d.tags || [],
+    checkpoints: d.checkpoints || [],
+  };
+}
+
+function bucketConfigToEvent(b: AppBucket): EventRecord {
+  return {
+    id: b.id,
+    bucketId: "timebox-buckets",
+    timestamp: new Date().toISOString(),
+    duration: 0,
+    data: {
+      name: b.name,
+      apps: b.apps,
+      category: b.category,
+      evalTag: b.evalTag,
+      triggerMinutes: b.triggerMinutes,
+      toleranceSeconds: b.toleranceSeconds,
+      color: b.color,
+    },
+  };
+}
+
+function eventToBucketConfig(e: EventRecord): AppBucket {
+  const d = e.data as Record<string, any>;
+  return {
+    id: e.id,
+    name: d.name || "",
+    apps: d.apps || [],
+    category: d.category || "工作",
+    evalTag: d.evalTag,
+    triggerMinutes: d.triggerMinutes ?? 5,
+    toleranceSeconds: d.toleranceSeconds ?? 60,
+    color: d.color || "#4F7FFF",
+  };
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
-  const [todos, setTodos] = useState<TodoItem[]>(INITIAL_TODOS);
-  const [sessions, setSessions] = useState<WorkSession[]>(INITIAL_SESSIONS);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [sessions, setSessions] = useState<WorkSession[]>([]);
+  const [longTasks, setLongTasks] = useState<LongTask[]>([]);
+  const [appBuckets, setAppBuckets] = useState<AppBucket[]>([]);
   const [sleepSuggestions, setSleepSuggestions] = useState<SleepSuggestion[]>([]);
+  const [bucketDetection, setBucketDetection] = useState<BucketDetection | null>(null);
+  const [recentAppNames, setRecentAppNames] = useState<string[]>([]);
   const [showNewTaskDialog, setShowNewTaskDialog] = useState(false);
   const [showEndTaskDialog, setShowEndTaskDialog] = useState(false);
   const [showManualSessionDialog, setShowManualSessionDialog] = useState(false);
+  const [showNewLongTaskDialog, setShowNewLongTaskDialog] = useState(false);
   const [taskToEnd, setTaskToEnd] = useState<Task | null>(null);
   const [dbReady, setDbReady] = useState(false);
   const [manualPrefill, setManualPrefill] = useState<{ name: string; category: string; startTime: Date; endTime: Date } | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ─── IndexedDB 初始化：加载数据 ──────────────────────────────────
+  // ─── Refs ──────────────────────────────────────────────────────────
+  const tasksRef = useRef<Task[]>([]);
+  tasksRef.current = tasks;
+  const sessionsRef = useRef<WorkSession[]>([]);
+  sessionsRef.current = sessions;
+  const longTasksRef = useRef<LongTask[]>([]);
+  longTasksRef.current = longTasks;
+  const bucketsRef = useRef<AppBucket[]>([]);
+  bucketsRef.current = appBuckets;
+  const bucketDetectionRef = useRef<BucketDetection | null>(null);
+  bucketDetectionRef.current = bucketDetection;
+
+  // ─── IndexedDB 初始化 ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
         await ensureDefaultBuckets();
-        const [taskEvents, todoEvents, sessionEvents] = await Promise.all([
+        const [taskEvents, todoEvents, sessionEvents, longTaskEvents, bucketEvents] = await Promise.all([
           getEventsByBucket("timebox-tasks"),
           getEventsByBucket("timebox-todos"),
           getEventsByBucket("timebox-sessions"),
+          getEventsByBucket("timebox-longtasks"),
+          getEventsByBucket("timebox-buckets"),
         ]);
         if (taskEvents.length > 0) setTasks(taskEvents.map(eventToTask));
         if (todoEvents.length > 0) setTodos(todoEvents.map(eventToTodo));
         if (sessionEvents.length > 0) setSessions(sessionEvents.map(eventToSession));
+        if (longTaskEvents.length > 0) setLongTasks(longTaskEvents.map(eventToLongTask));
+        if (bucketEvents.length > 0) setAppBuckets(bucketEvents.map(eventToBucketConfig));
       } catch (err) {
-        console.warn("IndexedDB 加载失败，使用默认数据", err);
+        console.warn("IndexedDB 加载失败", err);
       } finally {
         setDbReady(true);
       }
     })();
 
-    // 初始检查权限与状态同步 (Android 专用)
     if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      // 1. 检查悬浮窗权限
       FloatingWindow.checkPermission().then((res: { granted: boolean }) => {
-        if (!res.granted) {
-          FloatingWindow.requestPermission();
-        }
+        if (!res.granted) FloatingWindow.requestPermission();
       });
 
-      // 2. 状态热恢复：从原生 Service 获取当前计时状态，并启动悬浮窗
       setTimeout(async () => {
         try {
           const status = await FloatingWindow.getStatus();
           if (status.isRunning) {
-            console.log("[Native Sync] Restoring state from Service:", status);
             setTasks((prev) => {
-              const taskIndex = prev.findIndex(t => t.name === status.name);
-              if (taskIndex !== -1) {
+              const idx = prev.findIndex(t => t.name === status.name);
+              if (idx !== -1) {
                 const updated = [...prev];
-                updated[taskIndex] = {
-                  ...updated[taskIndex],
-                  isRunning: true,
-                  startTime: new Date(status.startTime),
-                  elapsed: status.elapsed
-                };
+                updated[idx] = { ...updated[idx], isRunning: true, startTime: new Date(status.startTime), elapsed: status.elapsed };
                 return updated;
               }
               return prev;
             });
           }
-        } catch (e) {
-          console.warn("[Native Sync] Failed to get status", e);
-        }
-        // 启动悬浮窗
-        const running = tasksRef.current.filter((t) => t.isRunning);
-        running.forEach((t) => {
-          FloatingWindow.startFloating({
-            name: t.name,
-            startTime: Date.now() - t.elapsed * 1000,
-            elapsed: 0,
-            color: t.color,
-          });
+        } catch (e) { /* ignore */ }
+
+        // 启动悬浮窗（普通任务 + 长线任务）
+        tasksRef.current.filter((t) => t.isRunning).forEach((t) => {
+          FloatingWindow.startFloating({ name: t.name, startTime: Date.now() - t.elapsed * 1000, elapsed: 0, color: t.color });
         });
+        longTasksRef.current.filter((t) => t.isRunning).forEach((t) => {
+          FloatingWindow.startFloating({ name: `[长] ${t.name}`, startTime: Date.now() - t.elapsed * 1000, elapsed: 0, color: t.color });
+        });
+
+        // 加载最近使用的 App 名称（用于桶配置自动补全）
+        try {
+          const statsRes = await FloatingWindow.getUsageStats({ startTime: Date.now() - 7 * 86400000, endTime: Date.now() });
+          const names: string[] = (statsRes.stats || [])
+            .map((s: any) => s.appName as string)
+            .filter((n: string) => n && n.length > 0 && !n.includes('.'));
+          if (names.length > 0) setRecentAppNames([...new Set(names)].sort());
+        } catch (e) { /* ignore */ }
 
         // 自动检测睡眠
         try {
@@ -341,7 +489,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             const sorted = [...uSessions].sort((a, b) => a.start - b.start);
             const gaps: SleepSuggestion[] = [];
             const SLEEP_GAP = 4.5 * 3600 * 1000;
-            // gap before first session
             const dayStart = yesterday0.getTime();
             if (sorted[0].start - dayStart >= SLEEP_GAP) {
               gaps.push({ id: `sleep_${dayStart}`, start: dayStart, end: sorted[0].start });
@@ -352,7 +499,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
                 gaps.push({ id: `sleep_${sorted[i].end}`, start: sorted[i].end, end: sorted[i + 1].start });
               }
             }
-            // filter already-recorded sleep sessions
             const existingSleep = sessionsRef.current.filter((s) => s.category === "睡觉");
             const filtered = gaps.filter((g) => {
               if (localStorage.getItem(`dismissed_sleep_${g.start}`)) return false;
@@ -360,38 +506,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             });
             if (filtered.length > 0) setSleepSuggestions(filtered);
           }
-        } catch (e) {
-          // usage permission not granted or error, ignore
-        }
+        } catch (e) { /* usage permission not granted */ }
       }, 2000);
     }
   }, []);
 
-  // ─── 持久化同步（每 30s 一次，不依赖 tasks 避免频繁重置） ──────
-  const tasksRef = useRef<Task[]>([]);
-  tasksRef.current = tasks;
-  const sessionsRef = useRef<WorkSession[]>([]);
-  sessionsRef.current = sessions;
-
+  // ─── 持久化（30s） ─────────────────────────────────────────────────
   useEffect(() => {
     if (!dbReady) return;
     const syncInterval = setInterval(() => {
       tasksRef.current.forEach((t) => saveEvent(taskToEvent(t)).catch(console.warn));
+      longTasksRef.current.forEach((t) => saveEvent(longTaskToEvent(t)).catch(console.warn));
     }, 30000);
     return () => clearInterval(syncInterval);
   }, [dbReady]);
 
-  // ─── 秒级计时（纯 state 更新，无副作用） ──────────────────────
+  // ─── 秒级计时 ──────────────────────────────────────────────────────
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       setTasks((prev) => prev.map((t) => (t.isRunning ? { ...t, elapsed: t.elapsed + 1 } : t)));
+      setLongTasks((prev) => prev.map((t) => (t.isRunning ? { ...t, elapsed: t.elapsed + 1 } : t)));
     }, 1000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
-  // ─── 前台恢复时从 FloatingService 同步 elapsed（以悬浮窗为准） ──
+  // ─── 前台恢复：从 FloatingService 同步 elapsed ─────────────────────
   useEffect(() => {
     if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
     const onVisible = async () => {
@@ -399,198 +538,305 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await FloatingWindow.getActiveTasks();
         const serviceMap: Record<string, number> = {};
-        (res.tasks || []).forEach((t: { name: string; elapsed: number }) => {
-          serviceMap[t.name] = t.elapsed;
-        });
-        setTasks((prev) =>
-          prev.map((t) => {
-            const svcElapsed = serviceMap[t.name];
-            if (t.isRunning && svcElapsed != null && svcElapsed > t.elapsed) {
-              return { ...t, elapsed: svcElapsed };
-            }
-            return t;
-          })
-        );
-      } catch (e) {
-        // service not running, ignore
-      }
+        (res.tasks || []).forEach((t: { name: string; elapsed: number }) => { serviceMap[t.name] = t.elapsed; });
+        setTasks((prev) => prev.map((t) => {
+          const svcElapsed = serviceMap[t.name];
+          if (t.isRunning && svcElapsed != null && svcElapsed > t.elapsed) return { ...t, elapsed: svcElapsed };
+          return t;
+        }));
+      } catch (e) { /* ignore */ }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
-  const addTask = useCallback(
-    (data: {
-      name: string;
-      description?: string;
-      category: string;
-      evalTag?: string;
-      tags: string[];
-      estimatedMinutes?: number;
-      startTime?: Date;
-    }) => {
-      const cat = getCategoryInfo(data.category);
-      const customStart = data.startTime;
-      const now = new Date();
-      const taskStart = customStart ?? now;
-      const initialElapsed = customStart
-        ? Math.max(0, Math.floor((Date.now() - customStart.getTime()) / 1000))
-        : 0;
-      const newTask: Task = {
-        id: makeId(),
-        name: data.name,
-        description: data.description,
-        category: data.category,
-        evalTag: data.evalTag,
-        color: cat.color,
-        bgColor: cat.bg,
-        startTime: taskStart,
-        elapsed: initialElapsed,
-        isRunning: true,
-        tags: data.tags,
-        estimatedMinutes: data.estimatedMinutes,
-      };
-      setTasks((prev) => [...prev, newTask]);
-      saveEvent(taskToEvent(newTask)).catch(console.warn);
-      if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-        FloatingWindow.startFloating({
-          name: newTask.name,
-          startTime: Date.now() - initialElapsed * 1000,
-          elapsed: 0,
-          color: newTask.color,
-        });
-      }
-    },
-    []
-  );
+  // ─── 应用桶自动检测（Android，每30s） ─────────────────────────────
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+
+    const pollBuckets = async () => {
+      if (bucketsRef.current.length === 0) return;
+      if (bucketDetectionRef.current) return; // 已有待确认项
+      const now = Date.now();
+      try {
+        const res = await FloatingWindow.getUsageEvents({ startTime: now - 15 * 60 * 1000, endTime: now });
+        const events: Array<{appName: string; start: number; end: number}> = res.sessions || [];
+        if (events.length === 0) return;
+
+        for (const bucket of bucketsRef.current) {
+          if (tasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
+          if (longTasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
+
+          const bEvents = events.filter(e => bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
+          if (bEvents.length === 0) continue;
+
+          // 防抖合并：间隔 <= toleranceSeconds 的事件视为连续
+          const sorted = [...bEvents].sort((a, b) => a.start - b.start);
+          let segStart = sorted[0].start;
+          let segEnd = sorted[0].end;
+
+          for (let i = 1; i < sorted.length; i++) {
+            if (sorted[i].start - segEnd <= bucket.toleranceSeconds * 1000) {
+              segEnd = Math.max(segEnd, sorted[i].end);
+            } else {
+              // 断开，重置到最新片段
+              segStart = sorted[i].start;
+              segEnd = sorted[i].end;
+            }
+          }
+
+          const isRecent = (now - segEnd) <= bucket.toleranceSeconds * 2 * 1000;
+          const durationMin = (segEnd - segStart) / 60000;
+
+          if (isRecent && durationMin >= bucket.triggerMinutes) {
+            setBucketDetection({
+              bucketId: bucket.id,
+              bucketName: bucket.name,
+              category: bucket.category,
+              color: bucket.color,
+              detectedMinutes: Math.round(durationMin),
+              trueStart: segStart,
+            });
+            break;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    };
+
+    const init = setTimeout(pollBuckets, 5000);
+    const iv = setInterval(pollBuckets, 30000);
+    return () => { clearTimeout(init); clearInterval(iv); };
+  }, []);
+
+  // ─── 并行计时任务 ─────────────────────────────────────────────────
+  const addTask = useCallback((data: {
+    name: string; description?: string; category: string; evalTag?: string;
+    tags: string[]; estimatedMinutes?: number; startTime?: Date;
+  }) => {
+    const cat = getCategoryInfo(data.category);
+    const customStart = data.startTime;
+    const taskStart = customStart ?? new Date();
+    const initialElapsed = customStart ? Math.max(0, Math.floor((Date.now() - customStart.getTime()) / 1000)) : 0;
+    const newTask: Task = {
+      id: makeId(), name: data.name, description: data.description,
+      category: data.category, evalTag: data.evalTag, color: cat.color, bgColor: cat.bg,
+      startTime: taskStart, elapsed: initialElapsed, isRunning: true,
+      tags: data.tags, estimatedMinutes: data.estimatedMinutes,
+    };
+    setTasks((prev) => [...prev, newTask]);
+    saveEvent(taskToEvent(newTask)).catch(console.warn);
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+    }
+  }, []);
 
   const endTask = useCallback((id: string, feeling?: string, outcome?: "completed" | "abandoned") => {
-    const task = tasks.find((t) => t.id === id);
+    const task = tasksRef.current.find((t) => t.id === id);
     if (!task) return;
-
     const session: WorkSession = {
-      id: makeId(),
-      taskName: task.name,
-      category: task.category,
-      evalTag: task.evalTag,
-      color: task.color,
-      startTime: task.startTime,
-      endTime: new Date(),
-      duration: task.elapsed,
-      feeling,
-      tags: task.tags,
-      estimatedMinutes: task.estimatedMinutes,
-      outcome,
+      id: makeId(), taskName: task.name, category: task.category, evalTag: task.evalTag,
+      color: task.color, startTime: task.startTime, endTime: new Date(),
+      duration: task.elapsed, feeling, tags: task.tags, estimatedMinutes: task.estimatedMinutes, outcome,
     };
     setSessions((s) => [session, ...s]);
     saveEvent(sessionToEvent(session)).catch(console.warn);
     deleteEvent(task.id).catch(console.warn);
-
-    const remaining = tasks.filter((t) => t.id !== id);
+    const remaining = tasksRef.current.filter((t) => t.id !== id);
     setTasks(remaining);
-
-    // 同步原生悬浮窗 — 副作用放在 setTasks 之外
     if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      const hasRunning = remaining.some((t) => t.isRunning);
-      if (!hasRunning) {
-        FloatingWindow.stopFloating();
-      } else {
-        FloatingWindow.removeTask({ name: task.name });
-      }
+      if (!remaining.some((t) => t.isRunning)) FloatingWindow.stopFloating();
+      else FloatingWindow.removeTask({ name: task.name });
     }
-  }, [tasks]);
-
-  const toggleTimer = useCallback((id: string) => {
-    const task = tasks.find((t) => t.id === id);
-    if (!task) return;
-    setTasks(tasks.map((t) => (t.id === id ? { ...t, isRunning: !t.isRunning } : t)));
-    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      if (task.isRunning) {
-        // 暂停：冻结计数（startTime=0 → service 直接返回 elapsed）
-        FloatingWindow.startFloating({
-          name: task.name,
-          startTime: 0,
-          elapsed: task.elapsed,
-          color: task.color,
-        });
-      } else {
-        // 恢复：以当前 elapsed 为基础发虚拟起始时间
-        FloatingWindow.startFloating({
-          name: task.name,
-          startTime: Date.now() - task.elapsed * 1000,
-          elapsed: 0,
-          color: task.color,
-        });
-      }
-    }
-  }, [tasks]);
-
-  const toggleTodo = useCallback((id: string) => {
-    setTodos((prev) => {
-      const updated = prev.map((t) => {
-        if (t.id === id) {
-          const toggled = { ...t, completed: !t.completed };
-          saveEvent(todoToEvent(toggled)).catch(console.warn);
-          return toggled;
-        }
-        return t;
-      });
-      return updated;
-    });
   }, []);
 
-  const addTodo = useCallback(
-    (text: string, category: string, priority: "high" | "medium" | "low") => {
-      const newTodo: TodoItem = { id: makeId(), text, completed: false, priority, category, archived: false };
-      setTodos((prev) => [...prev, newTodo]);
-      saveEvent(todoToEvent(newTodo)).catch(console.warn);
-    },
-    []
-  );
+  const toggleTimer = useCallback((id: string) => {
+    const task = tasksRef.current.find((t) => t.id === id);
+    if (!task) return;
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, isRunning: !t.isRunning } : t)));
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      if (task.isRunning) {
+        FloatingWindow.startFloating({ name: task.name, startTime: 0, elapsed: task.elapsed, color: task.color });
+      } else {
+        FloatingWindow.startFloating({ name: task.name, startTime: Date.now() - task.elapsed * 1000, elapsed: 0, color: task.color });
+      }
+    }
+  }, []);
+
+  // ─── 长线任务 ─────────────────────────────────────────────────────
+  const addLongTask = useCallback((data: {
+    name: string; description?: string; category: string; evalTag?: string;
+    tags: string[]; startTime?: Date;
+  }) => {
+    const cat = getCategoryInfo(data.category);
+    const taskStart = data.startTime ?? new Date();
+    const initialElapsed = data.startTime ? Math.max(0, Math.floor((Date.now() - data.startTime.getTime()) / 1000)) : 0;
+    const newTask: LongTask = {
+      id: makeId(), name: data.name, description: data.description,
+      category: data.category, evalTag: data.evalTag, color: cat.color, bgColor: cat.bg,
+      startTime: taskStart, elapsed: initialElapsed, isRunning: true,
+      tags: data.tags, checkpoints: [],
+    };
+    setLongTasks((prev) => [...prev, newTask]);
+    saveEvent(longTaskToEvent(newTask)).catch(console.warn);
+    // 推入悬浮窗
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      FloatingWindow.startFloating({ name: `[长] ${newTask.name}`, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+    }
+  }, []);
+
+  const endLongTask = useCallback((id: string, feeling?: string, outcome?: "completed" | "abandoned") => {
+    const task = longTasksRef.current.find((t) => t.id === id);
+    if (!task) return;
+    const session: WorkSession = {
+      id: makeId(), taskName: task.name, category: task.category, evalTag: task.evalTag,
+      color: task.color, startTime: task.startTime, endTime: new Date(),
+      duration: task.elapsed, feeling, tags: task.tags, outcome,
+    };
+    setSessions((prev) => [session, ...prev]);
+    saveEvent(sessionToEvent(session)).catch(console.warn);
+    deleteEvent(task.id).catch(console.warn);
+    setLongTasks((prev) => prev.filter((t) => t.id !== id));
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      FloatingWindow.removeTask({ name: `[长] ${task.name}` });
+    }
+  }, []);
+
+  const toggleLongTask = useCallback((id: string) => {
+    const task = longTasksRef.current.find((t) => t.id === id);
+    if (!task) return;
+    setLongTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const updated = { ...t, isRunning: !t.isRunning };
+      saveEvent(longTaskToEvent(updated)).catch(console.warn);
+      return updated;
+    }));
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      const floatName = `[长] ${task.name}`;
+      if (task.isRunning) {
+        // 暂停
+        FloatingWindow.startFloating({ name: floatName, startTime: 0, elapsed: task.elapsed, color: task.color });
+      } else {
+        // 恢复
+        FloatingWindow.startFloating({ name: floatName, startTime: Date.now() - task.elapsed * 1000, elapsed: 0, color: task.color });
+      }
+    }
+  }, []);
+
+  const addCheckpoint = useCallback((taskId: string, text: string) => {
+    const cp: LongTaskCheckpoint = { id: makeId(), text, completed: false };
+    setLongTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      const updated = { ...t, checkpoints: [...t.checkpoints, cp] };
+      saveEvent(longTaskToEvent(updated)).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const toggleCheckpoint = useCallback((taskId: string, checkpointId: string) => {
+    setLongTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      const updated = {
+        ...t,
+        checkpoints: t.checkpoints.map((c) =>
+          c.id === checkpointId ? { ...c, completed: !c.completed, completedAt: !c.completed ? Date.now() : undefined } : c
+        ),
+      };
+      saveEvent(longTaskToEvent(updated)).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const deleteCheckpoint = useCallback((taskId: string, checkpointId: string) => {
+    setLongTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      const updated = { ...t, checkpoints: t.checkpoints.filter((c) => c.id !== checkpointId) };
+      saveEvent(longTaskToEvent(updated)).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  // ─── 应用桶 ──────────────────────────────────────────────────────
+  const addBucket = useCallback((data: Omit<AppBucket, "id">) => {
+    const newBucket: AppBucket = { id: makeId(), ...data };
+    setAppBuckets((prev) => [...prev, newBucket]);
+    saveEvent(bucketConfigToEvent(newBucket)).catch(console.warn);
+  }, []);
+
+  const updateBucket = useCallback((bucket: AppBucket) => {
+    setAppBuckets((prev) => prev.map((b) => (b.id === bucket.id ? bucket : b)));
+    saveEvent(bucketConfigToEvent(bucket)).catch(console.warn);
+  }, []);
+
+  const deleteBucket = useCallback((id: string) => {
+    setAppBuckets((prev) => prev.filter((b) => b.id !== id));
+    deleteEvent(id).catch(console.warn);
+  }, []);
+
+  const confirmBucketDetection = useCallback(() => {
+    const det = bucketDetectionRef.current;
+    if (!det) return;
+    setBucketDetection(null);
+    const cat = getCategoryInfo(det.category);
+    const initialElapsed = Math.max(0, Math.floor((Date.now() - det.trueStart) / 1000));
+    const newTask: Task = {
+      id: makeId(), name: det.bucketName, category: det.category,
+      evalTag: undefined, color: det.color, bgColor: cat.bg,
+      startTime: new Date(det.trueStart), elapsed: initialElapsed,
+      isRunning: true, tags: [],
+    };
+    setTasks((prev) => [...prev, newTask]);
+    saveEvent(taskToEvent(newTask)).catch(console.warn);
+    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+      FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+    }
+  }, []);
+
+  const dismissBucketDetection = useCallback(() => setBucketDetection(null), []);
+
+  // ─── 待办 ─────────────────────────────────────────────────────────
+  const toggleTodo = useCallback((id: string) => {
+    setTodos((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const toggled = { ...t, completed: !t.completed };
+      saveEvent(todoToEvent(toggled)).catch(console.warn);
+      return toggled;
+    }));
+  }, []);
+
+  const addTodo = useCallback((text: string, category: string, priority: "high" | "medium" | "low") => {
+    const newTodo: TodoItem = { id: makeId(), text, completed: false, priority, category, archived: false };
+    setTodos((prev) => [...prev, newTodo]);
+    saveEvent(todoToEvent(newTodo)).catch(console.warn);
+  }, []);
 
   const archiveTodo = useCallback((id: string) => {
-    setTodos((prev) => {
-      const updated = prev.map((t) => {
-        if (t.id === id) {
-          const archived = { ...t, archived: true };
-          saveEvent(todoToEvent(archived)).catch(console.warn);
-          return archived;
-        }
-        return t;
-      });
-      return updated;
-    });
+    setTodos((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const archived = { ...t, archived: true };
+      saveEvent(todoToEvent(archived)).catch(console.warn);
+      return archived;
+    }));
   }, []);
 
   const unarchiveTodo = useCallback((id: string) => {
-    setTodos((prev) => {
-      const updated = prev.map((t) => {
-        if (t.id === id) {
-          const unarchived = { ...t, archived: false };
-          saveEvent(todoToEvent(unarchived)).catch(console.warn);
-          return unarchived;
-        }
-        return t;
-      });
-      return updated;
-    });
+    setTodos((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const unarchived = { ...t, archived: false };
+      saveEvent(todoToEvent(unarchived)).catch(console.warn);
+      return unarchived;
+    }));
   }, []);
 
+  // ─── 睡眠建议 ─────────────────────────────────────────────────────
   const confirmSleep = useCallback((suggestionId: string) => {
     setSleepSuggestions((prev) => {
       const s = prev.find((p) => p.id === suggestionId);
       if (!s) return prev;
       const cat = getCategoryInfo("睡觉");
-      const durationSec = Math.round((s.end - s.start) / 1000);
       const session: WorkSession = {
-        id: makeId(),
-        taskName: "睡觉",
-        category: "睡觉",
-        color: cat.color,
-        startTime: new Date(s.start),
-        endTime: new Date(s.end),
-        duration: durationSec,
-        tags: [],
+        id: makeId(), taskName: "睡觉", category: "睡觉", color: cat.color,
+        startTime: new Date(s.start), endTime: new Date(s.end),
+        duration: Math.round((s.end - s.start) / 1000), tags: [],
       };
       setSessions((prev2) => [session, ...prev2]);
       saveEvent(sessionToEvent(session)).catch(console.warn);
@@ -606,39 +852,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const exportToCSV = useCallback(() => {
-    downloadCSV(sessions);
-  }, [sessions]);
+  // ─── 其他 ─────────────────────────────────────────────────────────
+  const exportToCSV = useCallback(() => downloadCSV(sessions), [sessions]);
 
-  const addManualSession = useCallback(
-    (data: {
-      name: string;
-      category: string;
-      evalTag?: string;
-      startTime: Date;
-      endTime: Date;
-      feeling?: string;
-      tags: string[];
-    }) => {
-      const cat = getCategoryInfo(data.category);
-      const durationSec = Math.round((data.endTime.getTime() - data.startTime.getTime()) / 1000);
-      const session: WorkSession = {
-        id: makeId(),
-        taskName: data.name,
-        category: data.category,
-        evalTag: data.evalTag,
-        color: cat.color,
-        startTime: data.startTime,
-        endTime: data.endTime,
-        duration: durationSec,
-        feeling: data.feeling,
-        tags: data.tags,
-      };
-      setSessions((s) => [session, ...s]);
-      saveEvent(sessionToEvent(session)).catch(console.warn);
-    },
-    []
-  );
+  const addManualSession = useCallback((data: {
+    name: string; category: string; evalTag?: string;
+    startTime: Date; endTime: Date; feeling?: string; tags: string[];
+  }) => {
+    const cat = getCategoryInfo(data.category);
+    const session: WorkSession = {
+      id: makeId(), taskName: data.name, category: data.category, evalTag: data.evalTag,
+      color: cat.color, startTime: data.startTime, endTime: data.endTime,
+      duration: Math.round((data.endTime.getTime() - data.startTime.getTime()) / 1000),
+      feeling: data.feeling, tags: data.tags,
+    };
+    setSessions((s) => [session, ...s]);
+    saveEvent(sessionToEvent(session)).catch(console.warn);
+  }, []);
 
   const deleteSessionFn = useCallback((id: string) => {
     setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -652,60 +882,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const clearAllDataFn = useCallback(async () => {
     await clearAllDataDB();
-    setTasks([]);
-    setSessions([]);
-    setTodos([]);
+    setTasks([]); setSessions([]); setTodos([]); setLongTasks([]); setAppBuckets([]);
   }, []);
 
   return (
-    <AppContext.Provider
-      value={{
-        tasks,
-        todos,
-        sessions,
-        addTask,
-        endTask,
-        addManualSession,
-        toggleTimer,
-        toggleTodo,
-        addTodo,
-        archiveTodo,
-        unarchiveTodo,
-        sleepSuggestions,
-        confirmSleep,
-        dismissSleep,
-        exportToCSV,
-        deleteSession: deleteSessionFn,
-        updateSession: updateSessionFn,
-        clearAllData: clearAllDataFn,
-        showFloating: () => {
-          if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
-          const running = tasksRef.current.filter((t) => t.isRunning);
-          if (running.length === 0) return;
-          running.forEach((t) => {
-            FloatingWindow.startFloating({
-              name: t.name,
-              startTime: Date.now() - t.elapsed * 1000,
-              elapsed: 0,
-              color: t.color,
-            });
-          });
-        },
-        showNewTaskDialog,
-        setShowNewTaskDialog,
-        showEndTaskDialog,
-        setShowEndTaskDialog,
-        showManualSessionDialog,
-        setShowManualSessionDialog,
-        manualPrefill,
-        openManualWithPrefill: (prefill) => {
-          setManualPrefill(prefill);
-          setShowManualSessionDialog(true);
-        },
-        taskToEnd,
-        setTaskToEnd,
-      }}
-    >
+    <AppContext.Provider value={{
+      tasks, todos, sessions,
+      addTask, endTask, updateSession: updateSessionFn, addManualSession,
+      deleteSession: deleteSessionFn, exportToCSV, clearAllData: clearAllDataFn,
+      toggleTimer, toggleTodo, addTodo, archiveTodo, unarchiveTodo,
+      sleepSuggestions, confirmSleep, dismissSleep,
+      showFloating: () => {
+        if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+        tasksRef.current.filter((t) => t.isRunning).forEach((t) => {
+          FloatingWindow.startFloating({ name: t.name, startTime: Date.now() - t.elapsed * 1000, elapsed: 0, color: t.color });
+        });
+        longTasksRef.current.filter((t) => t.isRunning).forEach((t) => {
+          FloatingWindow.startFloating({ name: `[长] ${t.name}`, startTime: Date.now() - t.elapsed * 1000, elapsed: 0, color: t.color });
+        });
+      },
+      longTasks, addLongTask, endLongTask, toggleLongTask,
+      addCheckpoint, toggleCheckpoint, deleteCheckpoint,
+      appBuckets, addBucket, updateBucket, deleteBucket,
+      bucketDetection, confirmBucketDetection, dismissBucketDetection, recentAppNames,
+      showNewTaskDialog, setShowNewTaskDialog,
+      showEndTaskDialog, setShowEndTaskDialog,
+      showManualSessionDialog, setShowManualSessionDialog,
+      manualPrefill,
+      openManualWithPrefill: (prefill) => { setManualPrefill(prefill); setShowManualSessionDialog(true); },
+      showNewLongTaskDialog, setShowNewLongTaskDialog,
+      taskToEnd, setTaskToEnd,
+    }}>
       {children}
     </AppContext.Provider>
   );

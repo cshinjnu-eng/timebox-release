@@ -8,10 +8,12 @@ import {
   Download,
   Layers,
   BookOpen,
+  Boxes,
 } from "lucide-react";
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { NewTaskDialog } from "./NewTaskDialog";
+import { NewLongTaskDialog } from "./NewLongTaskDialog";
 import { EndTaskDialog } from "./EndTaskDialog";
 import { ManualSessionDialog } from "./ManualSessionDialog";
 import { GuideModal } from "./GuideModal";
@@ -21,6 +23,7 @@ const navItems = [
   { to: "/todo", label: "待办", icon: ClipboardList },
   { to: "/worklog", label: "数据", icon: FileText },
   { to: "/timeline", label: "时间轴", icon: GitBranch },
+  { to: "/buckets", label: "应用桶", icon: Boxes },
 ];
 
 function getNow() {
@@ -40,6 +43,7 @@ export function Layout() {
     setShowNewTaskDialog,
     showEndTaskDialog,
     showManualSessionDialog,
+    showNewLongTaskDialog,
     taskToEnd,
     exportToCSV,
   } = useApp();
@@ -150,6 +154,7 @@ export function Layout() {
 
       {/* Modals */}
       {showNewTaskDialog && <NewTaskDialog />}
+      {showNewLongTaskDialog && <NewLongTaskDialog />}
       {showEndTaskDialog && taskToEnd && <EndTaskDialog />}
       {showManualSessionDialog && <ManualSessionDialog />}
       {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
