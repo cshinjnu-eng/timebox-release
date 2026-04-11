@@ -357,6 +357,46 @@ public class MainActivity extends BridgeActivity {
         }
 
         @PluginMethod
+        public void showBucketAlert(PluginCall call) {
+            String bucketName = call.getString("bucketName", "");
+            int minutes = call.getInt("detectedMinutes", 0);
+            String color = call.getString("color", "#F59E0B");
+            Log.d(TAG, "showBucketAlert: bucket=" + bucketName + ", min=" + minutes);
+            Intent intent = new Intent(getContext(), FloatingService.class);
+            intent.setAction("BUCKET_ALERT");
+            intent.putExtra("bucketName", bucketName);
+            intent.putExtra("minutes", minutes);
+            intent.putExtra("color", color);
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getContext().startForegroundService(intent);
+                } else {
+                    getContext().startService(intent);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "showBucketAlert: failed", e);
+            }
+            call.resolve();
+        }
+
+        @PluginMethod
+        public void dismissBucketAlert(PluginCall call) {
+            Log.d(TAG, "dismissBucketAlert");
+            Intent intent = new Intent(getContext(), FloatingService.class);
+            intent.setAction("DISMISS_BUCKET_ALERT");
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    getContext().startForegroundService(intent);
+                } else {
+                    getContext().startService(intent);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "dismissBucketAlert: failed", e);
+            }
+            call.resolve();
+        }
+
+        @PluginMethod
         public void stopFloating(PluginCall call) {
             Log.d(TAG, "stopFloating called");
             Intent intent = new Intent(getContext(), FloatingService.class);

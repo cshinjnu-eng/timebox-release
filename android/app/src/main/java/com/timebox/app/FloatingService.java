@@ -89,6 +89,12 @@ public class FloatingService extends Service {
     private View dividerView;            // header 下方分割线
     private boolean isCollapsed = false; // 折叠状态
 
+    // 桶检测 Alert 悬浮 banner（与计时 overlay 独立）
+    private View bucketAlertView = null;
+    private final Runnable alertAutoDismiss = this::removeBucketAlertOverlay;
+    private static final int NOTIF_ALERT_ID = 102;
+    private static final String ALERT_CHANNEL_ID = "bucket_alert_channel";
+
     // 向后兼容旧 getStatus() 接口
     private static volatile boolean isRunning = false;
 
@@ -109,10 +115,16 @@ public class FloatingService extends Service {
             if (tasksNeedRebuild) {
                 tasksNeedRebuild = false;
                 if (activeTasks.isEmpty()) {
-                    logD("TICKER: no tasks, stopping service");
+                    if (bucketAlertView == null) {
+                        logD("TICKER: no tasks, no alert, stopping service");
+                        isRunning = false;
+                        stopForeground(true);
+                        stopSelf();
+                        return;
+                    }
+                    // 有 alert banner，不停服务，只停 ticker
+                    logD("TICKER: no tasks but alert is showing, pausing ticker");
                     isRunning = false;
-                    stopForeground(true);
-                    stopSelf();
                     return;
                 }
                 rebuildTaskRows();
@@ -215,9 +227,35 @@ public class FloatingService extends Service {
                 tasksNeedRebuild = true;
                 isRunning = false;
                 handler.removeCallbacks(ticker);
+                handler.removeCallbacks(alertAutoDismiss);
+                removeBucketAlertOverlay();
                 releaseWakeLock();
                 stopForeground(true);
                 stopSelf();
+                return START_NOT_STICKY;
+            }
+
+            if ("BUCKET_ALERT".equals(action)) {
+                String bName = intent.getStringExtra("bucketName");
+                int bMinutes = intent.getIntExtra("minutes", 0);
+                String bColor = intent.getStringExtra("color");
+                logD("BUCKET_ALERT: name=" + bName + ", min=" + bMinutes);
+                if (!isRunning && activeTasks.isEmpty()) {
+                    // 无计时任务：启动服务仅用于显示 alert
+                    try {
+                        createAlertNotificationChannel();
+                        startForeground(NOTIF_ALERT_ID, buildAlertNotification(bName));
+                    } catch (Exception e) { logE("BUCKET_ALERT: startForeground failed", e); }
+                }
+                if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                showBucketAlertOverlay(bName, bMinutes, bColor);
+                return START_NOT_STICKY;
+            }
+
+            if ("DISMISS_BUCKET_ALERT".equals(action)) {
+                logD("DISMISS_BUCKET_ALERT");
+                handler.removeCallbacks(alertAutoDismiss);
+                removeBucketAlertOverlay();
                 return START_NOT_STICKY;
             }
 
@@ -328,11 +366,14 @@ public class FloatingService extends Service {
         logD("onDestroy: isRunning=" + isRunning);
         isRunning = false;
         handler.removeCallbacks(ticker);
+        handler.removeCallbacks(alertAutoDismiss);
         releaseWakeLock();
         if (floatingView != null && windowManager != null) {
-            try {
-                windowManager.removeView(floatingView);
-            } catch (Exception ignored) {}
+            try { windowManager.removeView(floatingView); } catch (Exception ignored) {}
+        }
+        if (bucketAlertView != null && windowManager != null) {
+            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
+            bucketAlertView = null;
         }
         super.onDestroy();
     }
@@ -739,5 +780,180 @@ public class FloatingService extends Service {
         while (debugLogs.size() > MAX_DEBUG_LOGS) {
             debugLogs.remove(0);
         }
+    }
+
+    // ========== 桶检测 Alert 悬浮 banner ==========
+
+    private void showBucketAlertOverlay(String bucketName, int minutes, String colorHex) {
+        if (!Settings.canDrawOverlays(this)) {
+            logD("showBucketAlert: no overlay permission");
+            return;
+        }
+        handler.removeCallbacks(alertAutoDismiss);
+        if (bucketAlertView != null) {
+            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
+            bucketAlertView = null;
+        }
+        if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+
+        int parsedColor;
+        try { parsedColor = Color.parseColor(colorHex != null ? colorHex : "#F59E0B"); }
+        catch (Exception e) { parsedColor = Color.parseColor("#F59E0B"); }
+        final int accentColor = parsedColor;
+
+        // ── 根容器 ──
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable rootBg = new GradientDrawable();
+        rootBg.setColor(Color.parseColor("#F0161820"));
+        rootBg.setCornerRadius(dp(12));
+        rootBg.setStroke(dp(1), Color.parseColor("#2A2D3A"));
+        root.setBackground(rootBg);
+        root.setPadding(dp(14), dp(12), dp(14), dp(12));
+        root.setElevation(dp(8));
+
+        // ── 顶行：图标 + 文字 + 关闭按钮 ──
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        // 色条（左侧装饰）
+        android.view.View accent = new android.view.View(this);
+        GradientDrawable accentBg = new GradientDrawable();
+        accentBg.setColor(accentColor);
+        accentBg.setCornerRadius(dp(2));
+        accent.setBackground(accentBg);
+        LinearLayout.LayoutParams accentP = new LinearLayout.LayoutParams(dp(3), dp(32));
+        accentP.setMarginEnd(dp(10));
+        topRow.addView(accent, accentP);
+
+        // 文字（弹性）
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams textColP = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        textColP.setMarginEnd(dp(10));
+
+        TextView titleView = new TextView(this);
+        titleView.setText("检测到「" + bucketName + "」");
+        titleView.setTextColor(Color.parseColor("#E8EAF0"));
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        titleView.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+
+        TextView subView = new TextView(this);
+        subView.setText("已连续使用约 " + minutes + " 分钟");
+        subView.setTextColor(Color.parseColor("#8B8FA8"));
+        subView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+
+        textCol.addView(titleView);
+        textCol.addView(subView);
+        topRow.addView(textCol, textColP);
+
+        // 关闭按钮
+        TextView closeBtn = new TextView(this);
+        closeBtn.setText("✕");
+        closeBtn.setTextColor(Color.parseColor("#525675"));
+        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        closeBtn.setPadding(dp(6), dp(2), 0, dp(2));
+        closeBtn.setOnClickListener(v -> {
+            handler.removeCallbacks(alertAutoDismiss);
+            removeBucketAlertOverlay();
+        });
+        topRow.addView(closeBtn);
+        root.addView(topRow);
+
+        // ── 按钮行 ──
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(android.view.Gravity.END);
+        LinearLayout.LayoutParams btnRowP = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        btnRowP.topMargin = dp(10);
+
+        // 确认计时 → 打开 App
+        TextView confirmBtn = new TextView(this);
+        confirmBtn.setText("确认计时 →");
+        confirmBtn.setTextColor(Color.WHITE);
+        confirmBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        confirmBtn.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        GradientDrawable confirmBg = new GradientDrawable();
+        confirmBg.setColor(accentColor);
+        confirmBg.setCornerRadius(dp(8));
+        confirmBtn.setBackground(confirmBg);
+        confirmBtn.setPadding(dp(14), dp(8), dp(14), dp(8));
+        confirmBtn.setOnClickListener(v -> {
+            handler.removeCallbacks(alertAutoDismiss);
+            removeBucketAlertOverlay();
+            Intent openApp = new Intent(FloatingService.this, MainActivity.class);
+            openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            try { startActivity(openApp); } catch (Exception ignored) {}
+        });
+        btnRow.addView(confirmBtn);
+        root.addView(btnRow, btnRowP);
+
+        // ── 加入 WindowManager ──
+        int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                : WindowManager.LayoutParams.TYPE_PHONE;
+        WindowManager.LayoutParams alertParams = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT);
+        alertParams.gravity = android.view.Gravity.TOP | android.view.Gravity.FILL_HORIZONTAL;
+        alertParams.x = dp(12);
+        alertParams.y = dp(60); // 状态栏下方
+        alertParams.width = WindowManager.LayoutParams.MATCH_PARENT;
+
+        // 修正：用 MATCH_PARENT 时 x margin 通过 padding 控制
+        root.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        try {
+            windowManager.addView(root, alertParams);
+            bucketAlertView = root;
+            logD("showBucketAlert: overlay added for " + bucketName);
+        } catch (Exception e) {
+            logE("showBucketAlert: addView failed", e);
+        }
+
+        // 15秒后自动消失
+        handler.postDelayed(alertAutoDismiss, 15000);
+    }
+
+    private void removeBucketAlertOverlay() {
+        if (bucketAlertView != null && windowManager != null) {
+            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
+            bucketAlertView = null;
+            logD("removeBucketAlert: overlay removed");
+        }
+        // 仅用于显示 alert 的模式：无任务则停止服务
+        if (!isRunning || activeTasks.isEmpty()) {
+            try { stopForeground(true); } catch (Exception ignored) {}
+            stopSelf();
+        }
+    }
+
+    private void createAlertNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                    ALERT_CHANNEL_ID, "TimeBox 使用检测", NotificationManager.IMPORTANCE_DEFAULT);
+            channel.setShowBadge(true);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(channel);
+        }
+    }
+
+    private Notification buildAlertNotification(String bucketName) {
+        Intent ni = new Intent(this, MainActivity.class);
+        ni.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        PendingIntent pi = PendingIntent.getActivity(this, 1, ni,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                .setContentTitle("检测到「" + bucketName + "」使用")
+                .setContentText("点击进入 TimeBox 确认计时")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build();
     }
 }

@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Plus, Trash2, Pencil, X, Check, Boxes, ChevronDown, ChevronRight, Info, Search } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { useApp, CATEGORIES, AppBucket, getCategoryInfo } from "../context/AppContext";
+import { useApp, CATEGORIES, EVAL_TAGS, AppBucket, getCategoryInfo, getEvalTagInfo } from "../context/AppContext";
 
 const BUCKET_COLORS = [
   "#4F7FFF", "#A855F7", "#10B981", "#F59E0B", "#EF4444", "#06B6D4", "#EC4899", "#F97316",
@@ -11,6 +11,7 @@ interface BucketFormData {
   name: string;
   apps: string;
   category: string;
+  evalTag?: string;
   triggerMinutes: number;
   toleranceSeconds: number;
   color: string;
@@ -20,6 +21,7 @@ const DEFAULT_FORM: BucketFormData = {
   name: "",
   apps: "",
   category: "娱乐",
+  evalTag: undefined,
   triggerMinutes: 5,
   toleranceSeconds: 60,
   color: "#A855F7",
@@ -123,7 +125,7 @@ function BucketForm({
   const allCategories = [...CATEGORIES.map(c => c.name), "娱乐", "社交"].filter((v, i, a) => a.indexOf(v) === i);
 
   function handleSave() {
-    if (form.name.trim()) onSave({ ...form, apps: chipApps.join(", ") });
+    if (form.name.trim()) onSave({ ...form, evalTag: form.evalTag || undefined, apps: chipApps.join(", ") });
   }
 
   return (
@@ -172,6 +174,27 @@ function BucketForm({
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* Eval Tag */}
+      <div>
+        <label style={{ fontSize: 12, color: "#8B8FA8", display: "block", marginBottom: 5, fontWeight: 600 }}>评估标签（可选）</label>
+        <div className="flex flex-wrap gap-2">
+          {EVAL_TAGS.map((tag) => (
+            <button
+              key={tag.label}
+              onClick={() => setForm({ ...form, evalTag: form.evalTag === tag.label ? undefined : tag.label })}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium"
+              style={{
+                background: form.evalTag === tag.label ? tag.bg : "#1A1D29",
+                color: form.evalTag === tag.label ? tag.color : "#8B8FA8",
+                border: `1px solid ${form.evalTag === tag.label ? tag.color + "44" : "#252836"}`,
+              }}
+            >
+              {tag.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -248,9 +271,9 @@ function BucketCard({ bucket }: { bucket: AppBucket }) {
   if (editing) {
     return (
       <BucketForm
-        initial={{ name: bucket.name, apps: bucket.apps.join(", "), category: bucket.category, triggerMinutes: bucket.triggerMinutes, toleranceSeconds: bucket.toleranceSeconds, color: bucket.color }}
+        initial={{ name: bucket.name, apps: bucket.apps.join(", "), category: bucket.category, evalTag: bucket.evalTag, triggerMinutes: bucket.triggerMinutes, toleranceSeconds: bucket.toleranceSeconds, color: bucket.color }}
         onSave={(data) => {
-          updateBucket({ ...bucket, name: data.name.trim(), apps: data.apps.split(/[,，]/).map(a => a.trim()).filter(Boolean), category: data.category, triggerMinutes: data.triggerMinutes, toleranceSeconds: data.toleranceSeconds, color: data.color  });
+          updateBucket({ ...bucket, name: data.name.trim(), apps: data.apps.split(/[,，]/).map(a => a.trim()).filter(Boolean), category: data.category, evalTag: data.evalTag, triggerMinutes: data.triggerMinutes, toleranceSeconds: data.toleranceSeconds, color: data.color });
           setEditing(false);
         }}
         onCancel={() => setEditing(false)}
@@ -263,9 +286,12 @@ function BucketCard({ bucket }: { bucket: AppBucket }) {
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="rounded-lg flex-shrink-0" style={{ width: 10, height: 10, background: bucket.color, borderRadius: 9999, marginTop: 1 }} />
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span style={{ fontSize: 14, fontWeight: 600, color: "#E8EAF0" }}>{bucket.name}</span>
             <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: cat.bg, color: cat.color }}>{bucket.category}</span>
+            {bucket.evalTag && (() => { const et = getEvalTagInfo(bucket.evalTag); return et ? (
+              <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: et.bg, color: et.color }}>{et.label}</span>
+            ) : null; })()}
           </div>
           <p style={{ fontSize: 11, color: "#525675", marginTop: 2 }}>
             ≥{bucket.triggerMinutes}分钟触发 · 容忍{bucket.toleranceSeconds}秒中断 · {bucket.apps.length}个App
@@ -369,7 +395,7 @@ export function AppBucketsPage() {
           <div className="mb-4">
             <BucketForm
               onSave={(data) => {
-                addBucket({ name: data.name.trim(), apps: data.apps.split(/[,，]/).map(a => a.trim()).filter(Boolean), category: data.category, triggerMinutes: data.triggerMinutes, toleranceSeconds: data.toleranceSeconds, color: data.color  });
+                addBucket({ name: data.name.trim(), apps: data.apps.split(/[,，]/).map(a => a.trim()).filter(Boolean), category: data.category, evalTag: data.evalTag, triggerMinutes: data.triggerMinutes, toleranceSeconds: data.toleranceSeconds, color: data.color });
                 setShowAddForm(false);
               }}
               onCancel={() => setShowAddForm(false)}
