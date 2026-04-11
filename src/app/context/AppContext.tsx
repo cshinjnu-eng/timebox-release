@@ -401,6 +401,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sleepSuggestions, setSleepSuggestions] = useState<SleepSuggestion[]>([]);
   const [bucketDetection, setBucketDetection] = useState<BucketDetection | null>(null);
   const [recentAppNames, setRecentAppNames] = useState<string[]>([]);
+  const [visibilityTick, setVisibilityTick] = useState(0);
   const [showNewTaskDialog, setShowNewTaskDialog] = useState(false);
   const [showEndTaskDialog, setShowEndTaskDialog] = useState(false);
   const [showManualSessionDialog, setShowManualSessionDialog] = useState(false);
@@ -422,6 +423,68 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   bucketsRef.current = appBuckets;
   const bucketDetectionRef = useRef<BucketDetection | null>(null);
   bucketDetectionRef.current = bucketDetection;
+
+  // ─── 前台切换时重触发桶检测（用户从原生悬浮条点击进入 App）──────────
+  // 同时消费原生侧的 pendingBucketConfirm（用户已在悬浮窗点了确认，直接创建任务）
+  const consumePendingBucketConfirm = useCallback(async () => {
+    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+    try {
+      const res = await FloatingWindow.getPendingBucketConfirm?.();
+      if (!res?.hasPending) return;
+      const { bucketId, bucketName, color, detectedMinutes, trueStart, trueEnd, mode } = res;
+      // 查找对应的桶配置获取 category / evalTag
+      const bucket = bucketsRef.current.find(b => b.id === bucketId);
+      const category = bucket?.category || "其他";
+      const evalTag = bucket?.evalTag || "";
+      const cat = getCategoryInfo(category);
+      const today = new Date().toISOString().slice(0, 10);
+      localStorage.setItem(`bucket_day_${bucketId}_${today}`, "confirmed");
+
+      if (mode === "retrospective") {
+        const session: WorkSession = {
+          id: makeId(), taskName: bucketName, category,
+          evalTag, color: color || cat.color,
+          startTime: new Date(trueStart), endTime: new Date(trueEnd),
+          duration: Math.round((trueEnd - trueStart) / 1000),
+          tags: [],
+        };
+        setSessions((prev) => [session, ...prev]);
+        saveEvent(sessionToEvent(session)).catch(console.warn);
+      } else {
+        const initialElapsed = Math.max(0, Math.floor((Date.now() - trueStart) / 1000));
+        const newTask: Task = {
+          id: makeId(), name: bucketName, category,
+          evalTag, color: color || cat.color, bgColor: cat.bg,
+          startTime: new Date(trueStart), elapsed: initialElapsed,
+          isRunning: true, tags: [],
+        };
+        setTasks((prev) => [...prev, newTask]);
+        saveEvent(taskToEvent(newTask)).catch(console.warn);
+        if (FloatingWindow) {
+          FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+        }
+      }
+    } catch (_) { /* plugin method not available */ }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === "visible") {
+        setVisibilityTick(t => t + 1);
+        // 延迟检查 pending（等 native activity 完全 resume）
+        setTimeout(() => consumePendingBucketConfirm(), 500);
+      }
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, [consumePendingBucketConfirm]);
+
+  // 兜底：App 已在前台时原生 confirm 不触发 visibilitychange，轮询检查 pending
+  useEffect(() => {
+    if (!dbReady || Capacitor.getPlatform() !== "android") return;
+    const timer = setInterval(() => consumePendingBucketConfirm(), 3000);
+    return () => clearInterval(timer);
+  }, [dbReady, consumePendingBucketConfirm]);
 
   // ─── IndexedDB 初始化 ───────────────────────────────────────────────
   useEffect(() => {
@@ -640,9 +703,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (_) { /* usage permission not granted */ }
     })();
-  // appBuckets 变化（首次加载）时重新触发
+  // appBuckets 变化（首次加载）或从后台切回前台时重新触发
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dbReady, appBuckets]);
+  }, [dbReady, appBuckets, visibilityTick]);
 
   // ─── 并行计时任务 ─────────────────────────────────────────────────
   const addTask = useCallback((data: {

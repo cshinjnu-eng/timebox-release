@@ -75,6 +75,29 @@ public class FloatingService extends Service {
     static final List<String> firedTodayBuckets = new CopyOnWriteArrayList<>();
     static volatile String firedTodayDate = "";
 
+    // ── 待确认桶检测（原生确认按钮 → JS 消费） ─────────────────
+    public static class PendingBucketConfirm {
+        public String bucketId;
+        public String bucketName;
+        public String category;
+        public String evalTag;
+        public String color;
+        public int detectedMinutes;
+        public long trueStart;
+        public long trueEnd;
+        public String mode; // "realtime" or "retrospective"
+
+        PendingBucketConfirm(String bucketId, String bucketName, String category,
+                             String evalTag, String color, int detectedMinutes,
+                             long trueStart, long trueEnd, String mode) {
+            this.bucketId = bucketId; this.bucketName = bucketName;
+            this.category = category; this.evalTag = evalTag;
+            this.color = color; this.detectedMinutes = detectedMinutes;
+            this.trueStart = trueStart; this.trueEnd = trueEnd; this.mode = mode;
+        }
+    }
+    static volatile PendingBucketConfirm pendingBucketConfirm = null;
+
     // ── 多任务数据模型 ────────────────────────────────────────
     public static class TaskInfo {
         public String name;
@@ -294,10 +317,14 @@ public class FloatingService extends Service {
             }
 
             if ("BUCKET_ALERT".equals(action)) {
+                String bId = intent.getStringExtra("bucketId");
                 String bName = intent.getStringExtra("bucketName");
                 int bMinutes = intent.getIntExtra("minutes", 0);
                 String bColor = intent.getStringExtra("color");
-                logD("BUCKET_ALERT: name=" + bName + ", min=" + bMinutes);
+                boolean bRealtime = intent.getBooleanExtra("isRealtime", true);
+                long bStart = intent.getLongExtra("trueStart", 0);
+                long bEnd = intent.getLongExtra("trueEnd", 0);
+                logD("BUCKET_ALERT: name=" + bName + ", min=" + bMinutes + ", realtime=" + bRealtime);
                 if (!isRunning && activeTasks.isEmpty()) {
                     // 无计时任务：启动服务仅用于显示 alert
                     try {
@@ -306,7 +333,7 @@ public class FloatingService extends Service {
                     } catch (Exception e) { logE("BUCKET_ALERT: startForeground failed", e); }
                 }
                 if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-                showBucketAlertOverlay(bName, bMinutes, bColor);
+                showBucketAlertOverlay(bId != null ? bId : "", bName, bMinutes, bColor, bRealtime, bStart, bEnd);
                 return START_NOT_STICKY;
             }
 
@@ -372,7 +399,18 @@ public class FloatingService extends Service {
                 handler.post(ticker);
             }
         } else {
-            logD("onStartCommand: intent is null, flags=" + flags);
+            logD("onStartCommand: intent is null (service restarted), flags=" + flags + " → reloading persisted buckets");
+            // 服务被系统杀死后以 START_STICKY 重启：从 SharedPreferences 恢复桶配置并重启监控
+            loadBucketsFromPrefs();
+            if (!monitorBuckets.isEmpty()) {
+                if (!isRunning) {
+                    try {
+                        createNotificationChannel();
+                        startForeground(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
+                    } catch (Exception e) { logE("restart: startForeground failed", e); }
+                }
+                startBucketMonitor();
+            }
         }
         return START_STICKY;
     }
@@ -843,6 +881,32 @@ public class FloatingService extends Service {
 
     // ========== 桶后台监控 ==========
 
+    private void loadBucketsFromPrefs() {
+        String json = getMonitorPrefs().getString("buckets_json", "");
+        if (json.isEmpty()) { logD("loadBucketsFromPrefs: no saved buckets"); return; }
+        monitorBuckets.clear();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject b = arr.getJSONObject(i);
+                String id = b.optString("id", "");
+                String name = b.optString("name", "");
+                String color = b.optString("color", "#F59E0B");
+                int tMin = b.optInt("triggerMinutes", 5);
+                int tSec = b.optInt("toleranceSeconds", 60);
+                org.json.JSONArray appsArr = b.optJSONArray("apps");
+                List<String> apps = new ArrayList<>();
+                if (appsArr != null) {
+                    for (int j = 0; j < appsArr.length(); j++) apps.add(appsArr.getString(j));
+                }
+                monitorBuckets.add(new BucketConfig(id, name, apps, tMin, tSec, color));
+            }
+            logD("loadBucketsFromPrefs: loaded " + monitorBuckets.size() + " buckets");
+        } catch (Exception e) {
+            logE("loadBucketsFromPrefs: parse error", e);
+        }
+    }
+
     private void startBucketMonitor() {
         if (monitorRunning) return;
         monitorRunning = true;
@@ -865,41 +929,111 @@ public class FloatingService extends Service {
         }
     };
 
-    private void checkBucketsNow() {
-        if (monitorBuckets.isEmpty()) return;
-        if (bucketAlertView != null) return; // 已有 banner，不重复触发
+    // SharedPreferences key 前缀，用于持久化今日已触发桶
+    private static final String PREFS_NAME = "timebox_monitor";
+    private static final String PREFS_FIRED_DATE = "fired_date";
+    private static final String PREFS_FIRED_IDS = "fired_ids";
 
-        // 今日日期重置
+    private android.content.SharedPreferences getMonitorPrefs() {
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+    }
+
+    /**
+     * 获取指定桶今日已"消费"（已触发过）的累计使用时长（毫秒）。
+     * 返回 0 表示今天从未触发。
+     * SharedPreferences 格式: fired_ids = "|bucketId:consumedMs||bucketId2:consumedMs2|"
+     */
+    private long getConsumedMs(String bucketId) {
+        android.content.SharedPreferences prefs = getMonitorPrefs();
         java.util.Calendar cal = java.util.Calendar.getInstance();
         String today = String.format(Locale.US, "%04d-%02d-%02d",
                 cal.get(java.util.Calendar.YEAR),
                 cal.get(java.util.Calendar.MONTH) + 1,
                 cal.get(java.util.Calendar.DAY_OF_MONTH));
-        if (!today.equals(firedTodayDate)) {
-            firedTodayBuckets.clear();
-            firedTodayDate = today;
+        String savedDate = prefs.getString(PREFS_FIRED_DATE, "");
+        if (!today.equals(savedDate)) return 0;
+        String savedIds = prefs.getString(PREFS_FIRED_IDS, "");
+        String token = "|" + bucketId + ":";
+        int idx = savedIds.lastIndexOf(token);
+        if (idx < 0) return 0;
+        int valStart = idx + token.length();
+        int valEnd = savedIds.indexOf("|", valStart);
+        if (valEnd < 0) return 0;
+        try {
+            long val = Long.parseLong(savedIds.substring(valStart, valEnd));
+            // 旧版存的是 System.currentTimeMillis() 时间戳（约1.7万亿ms），
+            // 新版存的是累计使用时长（正常不超过24小时=86400000ms）。
+            // 检测到旧数据时重置为0。
+            if (val > 86400000L) {
+                logD("BucketMonitor: detected stale timestamp " + val + " for bucket=" + bucketId + ", resetting to 0");
+                return 0;
+            }
+            return val;
+        } catch (NumberFormatException e) {
+            return 0;
         }
+    }
 
+    /**
+     * 记录桶已消费的累计使用时长。每次触发后更新为当前总时长。
+     */
+    private void setConsumedMs(String bucketId, long consumedMs) {
+        android.content.SharedPreferences prefs = getMonitorPrefs();
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        String today = String.format(Locale.US, "%04d-%02d-%02d",
+                cal.get(java.util.Calendar.YEAR),
+                cal.get(java.util.Calendar.MONTH) + 1,
+                cal.get(java.util.Calendar.DAY_OF_MONTH));
+        String savedDate = prefs.getString(PREFS_FIRED_DATE, "");
+        String ids = today.equals(savedDate) ? prefs.getString(PREFS_FIRED_IDS, "") : "";
+        // 移除旧的该桶记录（如有）
+        String token = "|" + bucketId + ":";
+        int oldIdx = ids.indexOf(token);
+        if (oldIdx >= 0) {
+            int oldEnd = ids.indexOf("|", oldIdx + token.length());
+            if (oldEnd >= 0) {
+                ids = ids.substring(0, oldIdx) + ids.substring(oldEnd);
+            }
+        }
+        // 追加新记录
+        ids = ids + "|" + bucketId + ":" + consumedMs + "|";
+        prefs.edit()
+             .putString(PREFS_FIRED_DATE, today)
+             .putString(PREFS_FIRED_IDS, ids)
+             .apply();
+    }
+
+    // AppName 简单 session 结构
+    private static class AppSession {
+        final String appName;
+        final long start, end;
+        AppSession(String appName, long start, long end) {
+            this.appName = appName; this.start = start; this.end = end;
+        }
+    }
+
+    private void checkBucketsNow() {
+        if (monitorBuckets.isEmpty()) return;
+        if (bucketAlertView != null) return; // 已有 banner，不重复触发
         if (!hasUsagePermission()) { logD("BucketMonitor: no usage permission"); return; }
 
         UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
         if (usm == null) return;
 
         long now = System.currentTimeMillis();
-        // 扫描今天0点到现在
-        java.util.Calendar dayStart = java.util.Calendar.getInstance();
-        dayStart.set(java.util.Calendar.HOUR_OF_DAY, 0);
-        dayStart.set(java.util.Calendar.MINUTE, 0);
-        dayStart.set(java.util.Calendar.SECOND, 0);
-        dayStart.set(java.util.Calendar.MILLISECOND, 0);
+        java.util.Calendar dayStartCal = java.util.Calendar.getInstance();
+        dayStartCal.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        dayStartCal.set(java.util.Calendar.MINUTE, 0);
+        dayStartCal.set(java.util.Calendar.SECOND, 0);
+        dayStartCal.set(java.util.Calendar.MILLISECOND, 0);
 
-        android.app.usage.UsageEvents usageEvents = usm.queryEvents(dayStart.getTimeInMillis(), now);
-        // 解析成 session 列表
-        Map<String, Long> resumeMap = new HashMap<>();
-        List<long[]> rawSessions = new ArrayList<>(); // [start, end, appNameHash] — 存 displayName hashcode
-        Map<String, String> pkgToName = new HashMap<>();
-
+        // 解析今日所有 App 使用 session（直接存 displayName）
         PackageManager pm = getPackageManager();
+        Map<String, Long> resumeMap = new HashMap<>();
+        Map<String, String> pkgToName = new HashMap<>();
+        List<AppSession> allSessions = new ArrayList<>();
+
+        android.app.usage.UsageEvents usageEvents = usm.queryEvents(dayStartCal.getTimeInMillis(), now);
         while (usageEvents.hasNextEvent()) {
             android.app.usage.UsageEvents.Event ev = new android.app.usage.UsageEvents.Event();
             usageEvents.getNextEvent(ev);
@@ -911,70 +1045,81 @@ public class FloatingService extends Service {
                 Long t0 = resumeMap.remove(pkg);
                 if (t0 != null && ev.getTimeStamp() - t0 >= 3000) {
                     if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
-                    rawSessions.add(new long[]{ t0, ev.getTimeStamp(), pkg.hashCode() });
+                    allSessions.add(new AppSession(pkgToName.get(pkg), t0, ev.getTimeStamp()));
                 }
             }
         }
-        // 仍在前台
+        // 仍在前台的 app
         for (Map.Entry<String, Long> e : resumeMap.entrySet()) {
             long dur = now - e.getValue();
             if (dur >= 3000) {
                 String pkg = e.getKey();
                 if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
-                rawSessions.add(new long[]{ e.getValue(), now, pkg.hashCode() });
+                allSessions.add(new AppSession(pkgToName.get(pkg), e.getValue(), now));
             }
         }
 
-        for (BucketConfig bucket : monitorBuckets) {
-            if (firedTodayBuckets.contains(bucket.id)) continue;
+        logD("BucketMonitor: scanned " + allSessions.size() + " sessions today, buckets=" + monitorBuckets.size());
 
-            // 过滤出属于该桶的 sessions（按 displayName 匹配）
-            List<long[]> bSessions = new ArrayList<>();
-            for (long[] s : rawSessions) {
-                String pkg = null;
-                for (Map.Entry<String, String> e : pkgToName.entrySet()) {
-                    if (e.getKey().hashCode() == (int) s[2]) { pkg = e.getKey(); break; }
-                }
-                if (pkg == null) continue;
-                String name = pkgToName.get(pkg);
-                if (name == null) continue;
+        for (BucketConfig bucket : monitorBuckets) {
+            long consumedMs = getConsumedMs(bucket.id);
+
+            // 收集属于该桶的所有 session（按 displayName 精确匹配，大小写不敏感）
+            List<AppSession> bSessions = new ArrayList<>();
+            for (AppSession s : allSessions) {
                 for (String a : bucket.apps) {
-                    if (a.toLowerCase(Locale.ROOT).equals(name.toLowerCase(Locale.ROOT))) {
+                    if (a.toLowerCase(Locale.ROOT).equals(s.appName.toLowerCase(Locale.ROOT))) {
                         bSessions.add(s); break;
                     }
                 }
             }
-            if (bSessions.isEmpty()) continue;
 
-            // 防抖合并
-            bSessions.sort((a, b) -> Long.compare(a[0], b[0]));
-            long segStart = bSessions.get(0)[0], segEnd = bSessions.get(0)[1];
+            // 计算该桶今日总使用时长
+            long totalDurMs = 0;
+            for (AppSession s : bSessions) {
+                totalDurMs += (s.end - s.start);
+            }
+
+            // 未消费的新增使用时长 = 今日总时长 - 已消费时长
+            long unconsumedMs = totalDurMs - consumedMs;
+            long triggerMs = bucket.triggerMinutes * 60000L;
+
+            logD("BucketMonitor: checking bucket=" + bucket.name + " apps=" + bucket.apps
+                    + " trigMin=" + bucket.triggerMinutes
+                    + " totalMin=" + String.format(Locale.US, "%.1f", totalDurMs / 60000.0)
+                    + " consumedMin=" + String.format(Locale.US, "%.1f", consumedMs / 60000.0)
+                    + " unconsumedMin=" + String.format(Locale.US, "%.1f", unconsumedMs / 60000.0));
+
+            if (unconsumedMs < triggerMs) continue;
+
+            // 按时间排序，防抖合并（用于确定最近使用段的 trueStart/trueEnd）
+            if (bSessions.isEmpty()) continue;
+            bSessions.sort((a, b) -> Long.compare(a.start, b.start));
+            long segStart = bSessions.get(0).start, segEnd = bSessions.get(0).end;
             List<long[]> segments = new ArrayList<>();
             for (int i = 1; i < bSessions.size(); i++) {
-                if (bSessions.get(i)[0] - segEnd <= bucket.toleranceSeconds * 1000L) {
-                    segEnd = Math.max(segEnd, bSessions.get(i)[1]);
+                if (bSessions.get(i).start - segEnd <= bucket.toleranceSeconds * 1000L) {
+                    segEnd = Math.max(segEnd, bSessions.get(i).end);
                 } else {
                     segments.add(new long[]{ segStart, segEnd });
-                    segStart = bSessions.get(i)[0]; segEnd = bSessions.get(i)[1];
+                    segStart = bSessions.get(i).start; segEnd = bSessions.get(i).end;
                 }
             }
             segments.add(new long[]{ segStart, segEnd });
 
-            // 取最新的达标片段
-            long[] best = null;
-            for (long[] seg : segments) {
-                double durMin = (seg[1] - seg[0]) / 60000.0;
-                if (durMin >= bucket.triggerMinutes) best = seg;
-            }
-            if (best == null) continue;
+            // 取最新（最后一个）合并段作为展示给用户的时间区间
+            long[] latest = segments.get(segments.size() - 1);
 
-            int durMin = (int) Math.round((best[1] - best[0]) / 60000.0);
-            logD("BucketMonitor: TRIGGER bucket=" + bucket.name + " dur=" + durMin + "min");
+            int durMin = (int) Math.round(unconsumedMs / 60000.0);
+            boolean isRealtime = (now - latest[1]) <= 10 * 60000L;
+            String mode = isRealtime ? "realtime" : "retrospective";
+            logD("BucketMonitor: TRIGGER bucket=" + bucket.name + " dur=" + durMin + "min mode=" + mode
+                    + " newConsumed=" + String.format(Locale.US, "%.1f", totalDurMs / 60000.0) + "min");
 
-            firedTodayBuckets.add(bucket.id);
-
+            // 把当前总时长记为已消费，下次只有新增使用超过阈值才会再次触发
+            setConsumedMs(bucket.id, totalDurMs);
             if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-            showBucketAlertOverlay(bucket.name, durMin, bucket.color);
+            showBucketAlertOverlay(bucket.id, bucket.name, durMin, bucket.color, isRealtime, latest[0], latest[1]);
             break; // 一次只弹一个
         }
     }
@@ -1005,7 +1150,7 @@ public class FloatingService extends Service {
 
     // ========== 桶检测 Alert 悬浮 banner ==========
 
-    private void showBucketAlertOverlay(String bucketName, int minutes, String colorHex) {
+    private void showBucketAlertOverlay(String bucketId, String bucketName, int minutes, String colorHex, boolean isRealtime, long trueStart, long trueEnd) {
         if (!Settings.canDrawOverlays(this)) {
             logD("showBucketAlert: no overlay permission");
             return;
@@ -1061,7 +1206,9 @@ public class FloatingService extends Service {
         titleView.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
 
         TextView subView = new TextView(this);
-        subView.setText("已连续使用约 " + minutes + " 分钟");
+        subView.setText(isRealtime
+                ? "已连续使用约 " + minutes + " 分钟，开始计时？"
+                : "已使用约 " + minutes + " 分钟，记录为历史？");
         subView.setTextColor(Color.parseColor("#8B8FA8"));
         subView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
 
@@ -1092,7 +1239,7 @@ public class FloatingService extends Service {
 
         // 确认计时 → 打开 App
         TextView confirmBtn = new TextView(this);
-        confirmBtn.setText("确认计时 →");
+        confirmBtn.setText(isRealtime ? "确认计时 →" : "记录使用 →");
         confirmBtn.setTextColor(Color.WHITE);
         confirmBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         confirmBtn.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
@@ -1104,6 +1251,11 @@ public class FloatingService extends Service {
         confirmBtn.setOnClickListener(v -> {
             handler.removeCallbacks(alertAutoDismiss);
             removeBucketAlertOverlay();
+            // 设置 pending 数据供 JS 消费
+            String mode = isRealtime ? "realtime" : "retrospective";
+            pendingBucketConfirm = new PendingBucketConfirm(
+                    bucketId, bucketName, "", "", colorHex, minutes, trueStart, trueEnd, mode);
+            logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
             Intent openApp = new Intent(FloatingService.this, MainActivity.class);
             openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
             try { startActivity(openApp); } catch (Exception ignored) {}

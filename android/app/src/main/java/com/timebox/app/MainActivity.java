@@ -383,6 +383,26 @@ public class MainActivity extends BridgeActivity {
                     }
                 }
             }
+            // 持久化桶配置，供服务重启后恢复
+            try {
+                org.json.JSONArray savedArr = new org.json.JSONArray();
+                for (FloatingService.BucketConfig bc : FloatingService.monitorBuckets) {
+                    org.json.JSONObject obj = new org.json.JSONObject();
+                    obj.put("id", bc.id); obj.put("name", bc.name);
+                    obj.put("color", bc.color);
+                    obj.put("triggerMinutes", bc.triggerMinutes);
+                    obj.put("toleranceSeconds", bc.toleranceSeconds);
+                    org.json.JSONArray appsArr = new org.json.JSONArray();
+                    for (String a : bc.apps) appsArr.put(a);
+                    obj.put("apps", appsArr);
+                    savedArr.put(obj);
+                }
+                getContext().getSharedPreferences("timebox_monitor", Context.MODE_PRIVATE)
+                    .edit().putString("buckets_json", savedArr.toString()).apply();
+                Log.d(TAG, "updateBucketMonitor: saved " + savedArr.length() + " buckets to prefs");
+            } catch (Exception e) {
+                Log.w(TAG, "updateBucketMonitor: failed to persist buckets", e);
+            }
             // 如果有桶配置，确保监控服务在跑
             if (!FloatingService.monitorBuckets.isEmpty()) {
                 Intent intent = new Intent(getContext(), FloatingService.class);
@@ -438,6 +458,29 @@ public class MainActivity extends BridgeActivity {
                 Log.e(TAG, "dismissBucketAlert: failed", e);
             }
             call.resolve();
+        }
+
+        @PluginMethod
+        public void getPendingBucketConfirm(PluginCall call) {
+            FloatingService.PendingBucketConfirm p = FloatingService.pendingBucketConfirm;
+            JSObject ret = new JSObject();
+            if (p != null) {
+                Log.d(TAG, "getPendingBucketConfirm: found bucket=" + p.bucketName);
+                ret.put("hasPending", true);
+                ret.put("bucketId", p.bucketId);
+                ret.put("bucketName", p.bucketName);
+                ret.put("category", p.category);
+                ret.put("evalTag", p.evalTag != null ? p.evalTag : "");
+                ret.put("color", p.color);
+                ret.put("detectedMinutes", p.detectedMinutes);
+                ret.put("trueStart", p.trueStart);
+                ret.put("trueEnd", p.trueEnd);
+                ret.put("mode", p.mode);
+                FloatingService.pendingBucketConfirm = null; // consume
+            } else {
+                ret.put("hasPending", false);
+            }
+            call.resolve(ret);
         }
 
         @PluginMethod
