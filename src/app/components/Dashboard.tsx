@@ -317,9 +317,18 @@ function TimerCard({ task }: { task: Task }) {
 function BucketDetectionBanner() {
   const { bucketDetection, confirmBucketDetection, dismissBucketDetection } = useApp();
   if (!bucketDetection) return null;
-  const cat = getCategoryInfo(bucketDetection.category);
+
+  const isRetro = bucketDetection.mode === "retrospective";
+  const startLabel = formatSleepTime(bucketDetection.trueStart);
+  const endLabel = formatSleepTime(bucketDetection.trueEnd);
+  const durMins = bucketDetection.detectedMinutes;
+  const durLabel = durMins >= 60
+    ? `${Math.floor(durMins / 60)}h${durMins % 60 > 0 ? `${durMins % 60}m` : ""}`
+    : `${durMins}m`;
+
   return (
     <motion.div
+      layout
       initial={{ opacity: 0, y: -10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
@@ -329,10 +338,12 @@ function BucketDetectionBanner() {
       <Boxes size={16} style={{ color: bucketDetection.color, flexShrink: 0 }} />
       <div className="flex-1 min-w-0">
         <p style={{ fontSize: 13, color: bucketDetection.color, fontWeight: 600 }}>
-          检测到「{bucketDetection.bucketName}」
+          {isRetro ? `「${bucketDetection.bucketName}」使用记录` : `检测到「${bucketDetection.bucketName}」`}
         </p>
         <p style={{ fontSize: 11, color: "#8B8FA8", marginTop: 1 }}>
-          已连续使用 {bucketDetection.detectedMinutes} 分钟 · 是否开始计时？
+          {isRetro
+            ? `${startLabel} — ${endLabel} · ${durLabel}`
+            : `已连续使用 ${durMins} 分钟 · 确认后开始计时`}
         </p>
       </div>
       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -342,7 +353,7 @@ function BucketDetectionBanner() {
           style={{ background: bucketDetection.color, color: "#fff" }}
         >
           <Check size={12} />
-          确认
+          {isRetro ? "记录" : "开始计时"}
         </button>
         <button
           onClick={dismissBucketDetection}

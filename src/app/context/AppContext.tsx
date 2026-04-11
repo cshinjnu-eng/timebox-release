@@ -132,7 +132,11 @@ export interface BucketDetection {
   evalTag?: string;
   color: string;
   detectedMinutes: number;
-  trueStart: number; // ms — actual usage start to backfill
+  trueStart: number; // ms — actual usage start
+  trueEnd: number;   // ms — actual usage end
+  mode: "retrospective" | "realtime";
+  // retrospective: 用户已离开桶App，补录为已完成的时间记录（类似睡眠）
+  // realtime: 用户仍在或刚离开，创建运行中的计时任务（回填已用时间）
 }
 
 // ─── Context 类型 ──────────────────────────────────────────────────────
@@ -536,10 +540,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             if (!bIsRecent || bDurMin < bucket.triggerMinutes) continue;
             const bHourKey = Math.floor(bSegStart / 3600000);
             if (localStorage.getItem(`dismissed_bucket_${bucket.id}_${bHourKey}`)) continue;
+            const bMode = (bNow - bSegEnd) > 10 * 60000 ? "retrospective" : "realtime";
             setBucketDetection({
               bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
               evalTag: bucket.evalTag, color: bucket.color,
-              detectedMinutes: Math.round(bDurMin), trueStart: bSegStart,
+              detectedMinutes: Math.round(bDurMin),
+              trueStart: bSegStart, trueEnd: bSegEnd, mode: bMode,
             });
             break;
           }
@@ -611,10 +617,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           if (!vIsRecent || vDurMin < bucket.triggerMinutes) continue;
           const vHourKey = Math.floor(vSegStart / 3600000);
           if (localStorage.getItem(`dismissed_bucket_${bucket.id}_${vHourKey}`)) continue;
+          const vMode = (vNow - vSegEnd) > 10 * 60000 ? "retrospective" : "realtime";
           setBucketDetection({
             bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
             evalTag: bucket.evalTag, color: bucket.color,
-            detectedMinutes: Math.round(vDurMin), trueStart: vSegStart,
+            detectedMinutes: Math.round(vDurMin),
+            trueStart: vSegStart, trueEnd: vSegEnd, mode: vMode,
           });
           break;
         }
@@ -692,7 +700,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           const detection = {
             bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
             evalTag: bucket.evalTag, color: bucket.color,
-            detectedMinutes: Math.round(durationMin), trueStart: segStart,
+            detectedMinutes: Math.round(durationMin),
+            trueStart: segStart, trueEnd: now, mode: "realtime" as const,
           };
           setBucketDetection(detection);
           // 同时通过悬浮窗提醒（App 外也可见）
@@ -874,7 +883,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const confirmBucketDetection = useCallback(() => {
     const det = bucketDetectionRef.current;
     if (!det) return;
-    // 标记已处理，本小时内不再提示
     const hourKey = Math.floor(det.trueStart / 3600000);
     localStorage.setItem(`dismissed_bucket_${det.bucketId}_${hourKey}`, "confirmed");
     setBucketDetection(null);
@@ -882,17 +890,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       try { FloatingWindow.dismissBucketAlert?.(); } catch(_) {}
     }
     const cat = getCategoryInfo(det.category);
-    const initialElapsed = Math.max(0, Math.floor((Date.now() - det.trueStart) / 1000));
-    const newTask: Task = {
-      id: makeId(), name: det.bucketName, category: det.category,
-      evalTag: det.evalTag, color: det.color, bgColor: cat.bg,
-      startTime: new Date(det.trueStart), elapsed: initialElapsed,
-      isRunning: true, tags: [],
-    };
-    setTasks((prev) => [...prev, newTask]);
-    saveEvent(taskToEvent(newTask)).catch(console.warn);
-    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+
+    if (det.mode === "retrospective") {
+      // 补录为已完成的时间记录（类似睡眠确认）
+      const session: WorkSession = {
+        id: makeId(), taskName: det.bucketName, category: det.category,
+        evalTag: det.evalTag, color: det.color,
+        startTime: new Date(det.trueStart), endTime: new Date(det.trueEnd),
+        duration: Math.round((det.trueEnd - det.trueStart) / 1000),
+        tags: [],
+      };
+      setSessions((prev) => [session, ...prev]);
+      saveEvent(sessionToEvent(session)).catch(console.warn);
+    } else {
+      // 实时：创建运行中的计时任务（回填已用时间）
+      const initialElapsed = Math.max(0, Math.floor((Date.now() - det.trueStart) / 1000));
+      const newTask: Task = {
+        id: makeId(), name: det.bucketName, category: det.category,
+        evalTag: det.evalTag, color: det.color, bgColor: cat.bg,
+        startTime: new Date(det.trueStart), elapsed: initialElapsed,
+        isRunning: true, tags: [],
+      };
+      setTasks((prev) => [...prev, newTask]);
+      saveEvent(taskToEvent(newTask)).catch(console.warn);
+      if (Capacitor.getPlatform() === "android" && FloatingWindow) {
+        FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
+      }
     }
   }, []);
 
