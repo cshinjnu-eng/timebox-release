@@ -24,6 +24,7 @@ export const CATEGORIES = [
   { name: "工作", color: "#4F7FFF", bg: "rgba(79,127,255,0.15)", label: "Work" },
   { name: "学习", color: "#A855F7", bg: "rgba(168,85,247,0.15)", label: "Study" },
   { name: "生活", color: "#10B981", bg: "rgba(16,185,129,0.15)", label: "Life" },
+  { name: "娱乐", color: "#EC4899", bg: "rgba(236,72,153,0.15)", label: "Fun" },
   { name: "琐事", color: "#F59E0B", bg: "rgba(245,158,11,0.15)", label: "Chores" },
   { name: "睡觉", color: "#06B6D4", bg: "rgba(6,182,212,0.15)", label: "Sleep" },
 ];
@@ -513,43 +514,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         } catch (e) { /* usage permission not granted */ }
 
-        // 应用桶回溯检测（同睡眠逻辑，启动时检测近2小时内的桶使用）
+        // 推送桶配置给原生后台监控
         try {
-          const bNow = Date.now();
-          const bRes = await FloatingWindow.getUsageEvents({ startTime: bNow - 12 * 3600000, endTime: bNow });
-          const bAllEvents: Array<{appName: string; start: number; end: number}> = bRes.sessions || [];
-          for (const bucket of bucketsRef.current) {
-            if (tasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
-            if (sessionsRef.current.some(s => s.taskName === bucket.name &&
-                s.endTime.getTime() > bNow - 2 * 3600000)) continue;
-            const bEvts = bAllEvents.filter(e =>
-              bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
-            if (bEvts.length === 0) continue;
-            const bSorted = [...bEvts].sort((a, b) => a.start - b.start);
-            let bSegStart = bSorted[0].start, bSegEnd = bSorted[0].end;
-            for (let i = 1; i < bSorted.length; i++) {
-              if (bSorted[i].start - bSegEnd <= bucket.toleranceSeconds * 1000) {
-                bSegEnd = Math.max(bSegEnd, bSorted[i].end);
-              } else {
-                bSegStart = bSorted[i].start;
-                bSegEnd = bSorted[i].end;
-              }
-            }
-            const bDurMin = (bSegEnd - bSegStart) / 60000;
-            const bIsRecent = (bNow - bSegEnd) <= 30 * 60000; // 30分钟内
-            if (!bIsRecent || bDurMin < bucket.triggerMinutes) continue;
-            const bHourKey = Math.floor(bSegStart / 3600000);
-            if (localStorage.getItem(`dismissed_bucket_${bucket.id}_${bHourKey}`)) continue;
-            const bMode = (bNow - bSegEnd) > 10 * 60000 ? "retrospective" : "realtime";
-            setBucketDetection({
-              bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
-              evalTag: bucket.evalTag, color: bucket.color,
-              detectedMinutes: Math.round(bDurMin),
-              trueStart: bSegStart, trueEnd: bSegEnd, mode: bMode,
+          if (bucketsRef.current.length > 0) {
+            await FloatingWindow.updateBucketMonitor?.({
+              buckets: bucketsRef.current.map(b => ({
+                id: b.id, name: b.name, apps: b.apps,
+                triggerMinutes: b.triggerMinutes, toleranceSeconds: b.toleranceSeconds, color: b.color,
+              })),
             });
-            break;
           }
-        } catch (_) { /* usage permission not granted */ }
+        } catch (_) { /* plugin method optional */ }
+
       }, 2000);
     }
   }, []);
@@ -589,132 +565,84 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }));
       } catch (e) { /* ignore */ }
 
-      // 切回前台时也做桶回溯检测（15分钟内，isRecent 15分钟）
-      if (bucketDetectionRef.current) return;
-      try {
-        const vNow = Date.now();
-        const vRes = await FloatingWindow.getUsageEvents({ startTime: vNow - 2 * 3600000, endTime: vNow });
-        const vAllEvents: Array<{appName: string; start: number; end: number}> = vRes.sessions || [];
-        for (const bucket of bucketsRef.current) {
-          if (tasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
-          if (sessionsRef.current.some(s => s.taskName === bucket.name &&
-              s.endTime.getTime() > vNow - 2 * 3600000)) continue;
-          const vEvts = vAllEvents.filter(e =>
-            bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
-          if (vEvts.length === 0) continue;
-          const vSorted = [...vEvts].sort((a, b) => a.start - b.start);
-          let vSegStart = vSorted[0].start, vSegEnd = vSorted[0].end;
-          for (let i = 1; i < vSorted.length; i++) {
-            if (vSorted[i].start - vSegEnd <= bucket.toleranceSeconds * 1000) {
-              vSegEnd = Math.max(vSegEnd, vSorted[i].end);
-            } else {
-              vSegStart = vSorted[i].start;
-              vSegEnd = vSorted[i].end;
-            }
-          }
-          const vDurMin = (vSegEnd - vSegStart) / 60000;
-          const vIsRecent = (vNow - vSegEnd) <= 15 * 60000; // 15分钟内
-          if (!vIsRecent || vDurMin < bucket.triggerMinutes) continue;
-          const vHourKey = Math.floor(vSegStart / 3600000);
-          if (localStorage.getItem(`dismissed_bucket_${bucket.id}_${vHourKey}`)) continue;
-          const vMode = (vNow - vSegEnd) > 10 * 60000 ? "retrospective" : "realtime";
-          setBucketDetection({
-            bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
-            evalTag: bucket.evalTag, color: bucket.color,
-            detectedMinutes: Math.round(vDurMin),
-            trueStart: vSegStart, trueEnd: vSegEnd, mode: vMode,
-          });
-          break;
-        }
-      } catch (_) { /* ignore */ }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
-  // ─── 应用桶实时检测（Android，每30s；同时处理已有检测的自动撤销） ────
+  // ─── 应用桶检测：每次登录且 DB 加载完毕后执行一次今日扫描 ──────────
+  // 逻辑：扫描今天0点到现在的所有使用记录，找到所有符合条件的片段
+  // 用 localStorage 的 "bucket_day_{id}_{YYYY-MM-DD}" 键防止同一天重复提示
+  // 离开桶App超10分钟 → retrospective（补录已完成记录）
+  // 仍在使用或10分钟内离开 → realtime（开始计时）
   useEffect(() => {
-    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+    if (!dbReady || Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+    if (appBuckets.length === 0) return;
+    if (bucketDetectionRef.current) return;
 
-    const pollBuckets = async () => {
-      const now = Date.now();
-      if (bucketsRef.current.length === 0) return;
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-      // 已有待确认检测：检查用户是否已离开桶 App 超过容忍时间，若是则自动撤销
-      if (bucketDetectionRef.current) {
-        const det = bucketDetectionRef.current;
-        const bucket = bucketsRef.current.find(b => b.id === det.bucketId);
-        if (bucket) {
-          try {
-            const chkRes = await FloatingWindow.getUsageEvents({ startTime: now - 10 * 60000, endTime: now });
-            const chkEvts: Array<{appName: string; end: number}> = chkRes.sessions || [];
-            const bucketEvts = chkEvts.filter(e =>
-              bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
-            const latestEnd = bucketEvts.length > 0 ? Math.max(...bucketEvts.map(e => e.end)) : 0;
-            const stillRecent = bucketEvts.length > 0 && (now - latestEnd) <= bucket.toleranceSeconds * 2 * 1000;
-            if (!stillRecent) {
-              // 用户已离开，自动撤销
-              setBucketDetection(null);
-              try { FloatingWindow.dismissBucketAlert?.(); } catch(_) {}
-            }
-          } catch (_) {}
-        }
-        return;
-      }
-
-      // 无待确认检测：扫描近30分钟，isRecent=5分钟（实时检测）
+    (async () => {
       try {
-        const res = await FloatingWindow.getUsageEvents({ startTime: now - 30 * 60000, endTime: now });
-        const events: Array<{appName: string; start: number; end: number}> = res.sessions || [];
-        if (events.length === 0) return;
+        const now = Date.now();
+        const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+        const res = await FloatingWindow.getUsageEvents({ startTime: dayStart.getTime(), endTime: now });
+        const allEvents: Array<{appName: string; start: number; end: number}> = res.sessions || [];
 
-        for (const bucket of bucketsRef.current) {
+        for (const bucket of appBuckets) {
+          // 今天已经提示过（确认或忽略）→ 跳过
+          if (localStorage.getItem(`bucket_day_${bucket.id}_${today}`)) continue;
+          // 已有同名运行中任务 → 跳过
           if (tasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
           if (longTasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
-          if (sessionsRef.current.some(s => s.taskName === bucket.name &&
-              s.endTime.getTime() > now - 30 * 60000)) continue;
+          // 今天已有该桶对应的 session → 跳过
+          if (sessionsRef.current.some(s =>
+              s.taskName === bucket.name && s.startTime.getTime() >= dayStart.getTime())) continue;
 
-          const bEvents = events.filter(e =>
+          const bEvts = allEvents.filter(e =>
             bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
-          if (bEvents.length === 0) continue;
+          if (bEvts.length === 0) continue;
 
-          // 防抖合并：间隔 <= toleranceSeconds 的事件视为连续
-          const sorted = [...bEvents].sort((a, b) => a.start - b.start);
-          let segStart = sorted[0].start, segEnd = sorted[0].end;
+          // 防抖合并，找出所有独立片段
+          const sorted = [...bEvts].sort((a, b) => a.start - b.start);
+          const segments: Array<{start: number; end: number}> = [];
+          let sStart = sorted[0].start, sEnd = sorted[0].end;
           for (let i = 1; i < sorted.length; i++) {
-            if (sorted[i].start - segEnd <= bucket.toleranceSeconds * 1000) {
-              segEnd = Math.max(segEnd, sorted[i].end);
+            if (sorted[i].start - sEnd <= bucket.toleranceSeconds * 1000) {
+              sEnd = Math.max(sEnd, sorted[i].end);
             } else {
-              segStart = sorted[i].start;
-              segEnd = sorted[i].end;
+              segments.push({ start: sStart, end: sEnd });
+              sStart = sorted[i].start;
+              sEnd = sorted[i].end;
             }
           }
+          segments.push({ start: sStart, end: sEnd });
 
-          const isRecent = (now - segEnd) <= 5 * 60000; // 实时检测：5分钟内
-          const durationMin = (segEnd - segStart) / 60000;
-          if (!isRecent || durationMin < bucket.triggerMinutes) continue;
+          // 找符合阈值的片段（取最近的一个）
+          const qualifying = segments.filter(s => (s.end - s.start) / 60000 >= bucket.triggerMinutes);
+          if (qualifying.length === 0) continue;
+          const seg = qualifying[qualifying.length - 1]; // 最近的片段
 
-          const hourKey = Math.floor(segStart / 3600000);
-          if (localStorage.getItem(`dismissed_bucket_${bucket.id}_${hourKey}`)) continue;
+          const durMin = Math.round((seg.end - seg.start) / 60000);
+          const mode = (now - seg.end) > 10 * 60000 ? "retrospective" : "realtime";
 
-          const detection = {
-            bucketId: bucket.id, bucketName: bucket.name, category: bucket.category,
-            evalTag: bucket.evalTag, color: bucket.color,
-            detectedMinutes: Math.round(durationMin),
-            trueStart: segStart, trueEnd: now, mode: "realtime" as const,
-          };
-          setBucketDetection(detection);
-          // 同时通过悬浮窗提醒（App 外也可见）
-          try { FloatingWindow.showBucketAlert?.({ bucketName: bucket.name, detectedMinutes: Math.round(durationMin), color: bucket.color }); } catch(_) {}
-          break;
+          setBucketDetection({
+            bucketId: bucket.id, bucketName: bucket.name,
+            category: bucket.category, evalTag: bucket.evalTag, color: bucket.color,
+            detectedMinutes: durMin, trueStart: seg.start, trueEnd: seg.end, mode,
+          });
+
+          // realtime 模式同步触发悬浮窗提醒
+          if (mode === "realtime") {
+            try { FloatingWindow.showBucketAlert?.({ bucketName: bucket.name, detectedMinutes: durMin, color: bucket.color }); } catch(_) {}
+          }
+          break; // 一次只提示一个桶
         }
-      } catch (e) { /* ignore */ }
-    };
-
-    const init = setTimeout(pollBuckets, 5000);
-    const iv = setInterval(pollBuckets, 30000);
-    return () => { clearTimeout(init); clearInterval(iv); };
-  }, []);
+      } catch (_) { /* usage permission not granted */ }
+    })();
+  // appBuckets 变化（首次加载）时重新触发
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbReady, appBuckets]);
 
   // ─── 并行计时任务 ─────────────────────────────────────────────────
   const addTask = useCallback((data: {
@@ -864,27 +792,51 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ─── 应用桶 ──────────────────────────────────────────────────────
+  function pushBucketsToMonitor(buckets: AppBucket[]) {
+    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
+    try {
+      FloatingWindow.updateBucketMonitor?.({
+        buckets: buckets.map(b => ({
+          id: b.id, name: b.name, apps: b.apps,
+          triggerMinutes: b.triggerMinutes, toleranceSeconds: b.toleranceSeconds, color: b.color,
+        })),
+      });
+    } catch (_) {}
+  }
+
   const addBucket = useCallback((data: Omit<AppBucket, "id">) => {
     const newBucket: AppBucket = { id: makeId(), ...data };
-    setAppBuckets((prev) => [...prev, newBucket]);
+    setAppBuckets((prev) => {
+      const next = [...prev, newBucket];
+      pushBucketsToMonitor(next);
+      return next;
+    });
     saveEvent(bucketConfigToEvent(newBucket)).catch(console.warn);
   }, []);
 
   const updateBucket = useCallback((bucket: AppBucket) => {
-    setAppBuckets((prev) => prev.map((b) => (b.id === bucket.id ? bucket : b)));
+    setAppBuckets((prev) => {
+      const next = prev.map((b) => (b.id === bucket.id ? bucket : b));
+      pushBucketsToMonitor(next);
+      return next;
+    });
     saveEvent(bucketConfigToEvent(bucket)).catch(console.warn);
   }, []);
 
   const deleteBucket = useCallback((id: string) => {
-    setAppBuckets((prev) => prev.filter((b) => b.id !== id));
+    setAppBuckets((prev) => {
+      const next = prev.filter((b) => b.id !== id);
+      pushBucketsToMonitor(next);
+      return next;
+    });
     deleteEvent(id).catch(console.warn);
   }, []);
 
   const confirmBucketDetection = useCallback(() => {
     const det = bucketDetectionRef.current;
     if (!det) return;
-    const hourKey = Math.floor(det.trueStart / 3600000);
-    localStorage.setItem(`dismissed_bucket_${det.bucketId}_${hourKey}`, "confirmed");
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem(`bucket_day_${det.bucketId}_${today}`, "confirmed");
     setBucketDetection(null);
     if (Capacitor.getPlatform() === "android" && FloatingWindow) {
       try { FloatingWindow.dismissBucketAlert?.(); } catch(_) {}
@@ -922,8 +874,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const dismissBucketDetection = useCallback(() => {
     const det = bucketDetectionRef.current;
     if (det) {
-      const hourKey = Math.floor(det.trueStart / 3600000);
-      localStorage.setItem(`dismissed_bucket_${det.bucketId}_${hourKey}`, "dismissed");
+      const today = new Date().toISOString().slice(0, 10);
+      localStorage.setItem(`bucket_day_${det.bucketId}_${today}`, "dismissed");
     }
     setBucketDetection(null);
     if (Capacitor.getPlatform() === "android" && FloatingWindow) {

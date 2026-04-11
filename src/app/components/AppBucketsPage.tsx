@@ -24,7 +24,7 @@ const DEFAULT_FORM: BucketFormData = {
   evalTag: undefined,
   triggerMinutes: 5,
   toleranceSeconds: 60,
-  color: "#A855F7",
+  color: "#EC4899",
 };
 
 // ─── App 名称 Chip 输入 + 自动补全 ────────────────────────────────────
@@ -122,7 +122,7 @@ function BucketForm({
   const [chipApps, setChipApps] = useState<string[]>(initialApps);
 
   // Allow any category name including custom
-  const allCategories = [...CATEGORIES.map(c => c.name), "娱乐", "社交"].filter((v, i, a) => a.indexOf(v) === i);
+  const allCategories = CATEGORIES.map(c => c.name);
 
   function handleSave() {
     if (form.name.trim()) onSave({ ...form, evalTag: form.evalTag || undefined, apps: chipApps.join(", ") });
@@ -136,7 +136,7 @@ function BucketForm({
         <input
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
-          placeholder="如：娱乐、社交、学习"
+          placeholder="如：刷剧桶、学习桶"
           className="w-full px-3 py-2 rounded-lg outline-none"
           style={{ background: "#0B0D14", border: "1px solid #252836", color: "#E8EAF0", fontSize: 14 }}
         />

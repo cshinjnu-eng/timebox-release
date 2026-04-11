@@ -27,13 +27,20 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.app.AppOpsManager;
+import android.app.usage.UsageEvents;
+import android.app.usage.UsageStatsManager;
+import android.content.pm.PackageManager;
+import android.os.Process;
 import androidx.core.app.NotificationCompat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class FloatingService extends Service {
@@ -43,6 +50,30 @@ public class FloatingService extends Service {
 
     private static final int MAX_DEBUG_LOGS = 200;
     private static final int DIAGNOSTIC_LOG_INTERVAL = 30; // 每 30 tick (30秒) 输出一次诊断
+
+    // ── 桶配置（JS → 原生，供后台监控使用） ────────────────────
+    public static class BucketConfig {
+        public String id;
+        public String name;
+        public List<String> apps; // display names (lower-cased for matching)
+        public int triggerMinutes;
+        public int toleranceSeconds;
+        public String color;
+
+        BucketConfig(String id, String name, List<String> apps,
+                     int triggerMinutes, int toleranceSeconds, String color) {
+            this.id = id; this.name = name; this.apps = apps;
+            this.triggerMinutes = triggerMinutes;
+            this.toleranceSeconds = toleranceSeconds;
+            this.color = color;
+        }
+    }
+
+    // 静态桶配置（从 JS 更新）
+    static final List<BucketConfig> monitorBuckets = new CopyOnWriteArrayList<>();
+    // 今日已触发过的桶id（跨启动用 SharedPreferences 持久化，这里内存缓存）
+    static final List<String> firedTodayBuckets = new CopyOnWriteArrayList<>();
+    static volatile String firedTodayDate = "";
 
     // ── 多任务数据模型 ────────────────────────────────────────
     public static class TaskInfo {
@@ -101,6 +132,11 @@ public class FloatingService extends Service {
     private PowerManager.WakeLock wakeLock;
     private int tickCount = 0;
     private long lastOverlayRecoveryMs = 0;
+
+    // 桶后台监控（每60s独立轮询，不依赖计时任务）
+    private final Handler monitorHandler = new Handler(Looper.getMainLooper());
+    private static final int MONITOR_INTERVAL_MS = 60_000;
+    private volatile boolean monitorRunning = false;
 
     // --- 静态日志缓冲区，供前端 getDiagnosticInfo() 读取 ---
     private static final List<String> debugLogs = Collections.synchronizedList(new ArrayList<>());
@@ -232,6 +268,28 @@ public class FloatingService extends Service {
                 releaseWakeLock();
                 stopForeground(true);
                 stopSelf();
+                return START_NOT_STICKY;
+            }
+
+            if ("START_MONITOR".equals(action)) {
+                logD("START_MONITOR: starting bucket background polling");
+                startBucketMonitor();
+                // 确保服务以 foreground 方式运行（如果还没有计时任务）
+                if (!isRunning) {
+                    try {
+                        createNotificationChannel();
+                        startForeground(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
+                    } catch (Exception e) { logE("START_MONITOR: startForeground failed", e); }
+                }
+                return START_STICKY;
+            }
+
+            if ("STOP_MONITOR".equals(action)) {
+                logD("STOP_MONITOR: stopping bucket background polling");
+                stopBucketMonitor();
+                if (!isRunning && activeTasks.isEmpty() && bucketAlertView == null) {
+                    stopForeground(true); stopSelf();
+                }
                 return START_NOT_STICKY;
             }
 
@@ -367,6 +425,7 @@ public class FloatingService extends Service {
         isRunning = false;
         handler.removeCallbacks(ticker);
         handler.removeCallbacks(alertAutoDismiss);
+        stopBucketMonitor();
         releaseWakeLock();
         if (floatingView != null && windowManager != null) {
             try { windowManager.removeView(floatingView); } catch (Exception ignored) {}
@@ -779,6 +838,168 @@ public class FloatingService extends Service {
         debugLogs.add(entry);
         while (debugLogs.size() > MAX_DEBUG_LOGS) {
             debugLogs.remove(0);
+        }
+    }
+
+    // ========== 桶后台监控 ==========
+
+    private void startBucketMonitor() {
+        if (monitorRunning) return;
+        monitorRunning = true;
+        monitorHandler.post(monitorRunnable);
+        logD("BucketMonitor: started, interval=" + MONITOR_INTERVAL_MS + "ms");
+    }
+
+    private void stopBucketMonitor() {
+        monitorRunning = false;
+        monitorHandler.removeCallbacks(monitorRunnable);
+        logD("BucketMonitor: stopped");
+    }
+
+    private final Runnable monitorRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!monitorRunning) return;
+            checkBucketsNow();
+            monitorHandler.postDelayed(this, MONITOR_INTERVAL_MS);
+        }
+    };
+
+    private void checkBucketsNow() {
+        if (monitorBuckets.isEmpty()) return;
+        if (bucketAlertView != null) return; // 已有 banner，不重复触发
+
+        // 今日日期重置
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        String today = String.format(Locale.US, "%04d-%02d-%02d",
+                cal.get(java.util.Calendar.YEAR),
+                cal.get(java.util.Calendar.MONTH) + 1,
+                cal.get(java.util.Calendar.DAY_OF_MONTH));
+        if (!today.equals(firedTodayDate)) {
+            firedTodayBuckets.clear();
+            firedTodayDate = today;
+        }
+
+        if (!hasUsagePermission()) { logD("BucketMonitor: no usage permission"); return; }
+
+        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+        if (usm == null) return;
+
+        long now = System.currentTimeMillis();
+        // 扫描今天0点到现在
+        java.util.Calendar dayStart = java.util.Calendar.getInstance();
+        dayStart.set(java.util.Calendar.HOUR_OF_DAY, 0);
+        dayStart.set(java.util.Calendar.MINUTE, 0);
+        dayStart.set(java.util.Calendar.SECOND, 0);
+        dayStart.set(java.util.Calendar.MILLISECOND, 0);
+
+        android.app.usage.UsageEvents usageEvents = usm.queryEvents(dayStart.getTimeInMillis(), now);
+        // 解析成 session 列表
+        Map<String, Long> resumeMap = new HashMap<>();
+        List<long[]> rawSessions = new ArrayList<>(); // [start, end, appNameHash] — 存 displayName hashcode
+        Map<String, String> pkgToName = new HashMap<>();
+
+        PackageManager pm = getPackageManager();
+        while (usageEvents.hasNextEvent()) {
+            android.app.usage.UsageEvents.Event ev = new android.app.usage.UsageEvents.Event();
+            usageEvents.getNextEvent(ev);
+            String pkg = ev.getPackageName();
+
+            if (ev.getEventType() == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                resumeMap.put(pkg, ev.getTimeStamp());
+            } else if (ev.getEventType() == android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED) {
+                Long t0 = resumeMap.remove(pkg);
+                if (t0 != null && ev.getTimeStamp() - t0 >= 3000) {
+                    if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
+                    rawSessions.add(new long[]{ t0, ev.getTimeStamp(), pkg.hashCode() });
+                }
+            }
+        }
+        // 仍在前台
+        for (Map.Entry<String, Long> e : resumeMap.entrySet()) {
+            long dur = now - e.getValue();
+            if (dur >= 3000) {
+                String pkg = e.getKey();
+                if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
+                rawSessions.add(new long[]{ e.getValue(), now, pkg.hashCode() });
+            }
+        }
+
+        for (BucketConfig bucket : monitorBuckets) {
+            if (firedTodayBuckets.contains(bucket.id)) continue;
+
+            // 过滤出属于该桶的 sessions（按 displayName 匹配）
+            List<long[]> bSessions = new ArrayList<>();
+            for (long[] s : rawSessions) {
+                String pkg = null;
+                for (Map.Entry<String, String> e : pkgToName.entrySet()) {
+                    if (e.getKey().hashCode() == (int) s[2]) { pkg = e.getKey(); break; }
+                }
+                if (pkg == null) continue;
+                String name = pkgToName.get(pkg);
+                if (name == null) continue;
+                for (String a : bucket.apps) {
+                    if (a.toLowerCase(Locale.ROOT).equals(name.toLowerCase(Locale.ROOT))) {
+                        bSessions.add(s); break;
+                    }
+                }
+            }
+            if (bSessions.isEmpty()) continue;
+
+            // 防抖合并
+            bSessions.sort((a, b) -> Long.compare(a[0], b[0]));
+            long segStart = bSessions.get(0)[0], segEnd = bSessions.get(0)[1];
+            List<long[]> segments = new ArrayList<>();
+            for (int i = 1; i < bSessions.size(); i++) {
+                if (bSessions.get(i)[0] - segEnd <= bucket.toleranceSeconds * 1000L) {
+                    segEnd = Math.max(segEnd, bSessions.get(i)[1]);
+                } else {
+                    segments.add(new long[]{ segStart, segEnd });
+                    segStart = bSessions.get(i)[0]; segEnd = bSessions.get(i)[1];
+                }
+            }
+            segments.add(new long[]{ segStart, segEnd });
+
+            // 取最新的达标片段
+            long[] best = null;
+            for (long[] seg : segments) {
+                double durMin = (seg[1] - seg[0]) / 60000.0;
+                if (durMin >= bucket.triggerMinutes) best = seg;
+            }
+            if (best == null) continue;
+
+            int durMin = (int) Math.round((best[1] - best[0]) / 60000.0);
+            logD("BucketMonitor: TRIGGER bucket=" + bucket.name + " dur=" + durMin + "min");
+
+            firedTodayBuckets.add(bucket.id);
+
+            if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+            showBucketAlertOverlay(bucket.name, durMin, bucket.color);
+            break; // 一次只弹一个
+        }
+    }
+
+    private boolean hasUsagePermission() {
+        AppOpsManager aom = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
+        if (aom == null) return false;
+        int mode;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            mode = aom.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(), getPackageName());
+        } else {
+            mode = aom.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
+                    Process.myUid(), getPackageName());
+        }
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    private String resolveAppName(String pkg, PackageManager pm) {
+        try {
+            android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            return pm.getApplicationLabel(ai).toString();
+        } catch (PackageManager.NameNotFoundException e) {
+            int dot = pkg.lastIndexOf('.');
+            return dot >= 0 ? pkg.substring(dot + 1) : pkg;
         }
     }
 

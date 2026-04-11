@@ -356,6 +356,50 @@ public class MainActivity extends BridgeActivity {
             call.resolve(ret);
         }
 
+        // 从 JS 传入桶配置并启动/更新后台监控
+        @PluginMethod
+        public void updateBucketMonitor(PluginCall call) {
+            com.getcapacitor.JSArray buckets = call.getArray("buckets");
+            Log.d(TAG, "updateBucketMonitor: count=" + (buckets != null ? buckets.length() : 0));
+            FloatingService.monitorBuckets.clear();
+            if (buckets != null) {
+                for (int i = 0; i < buckets.length(); i++) {
+                    try {
+                        org.json.JSONObject b = buckets.getJSONObject(i);
+                        String id = b.optString("id", "");
+                        String name = b.optString("name", "");
+                        String color = b.optString("color", "#F59E0B");
+                        int triggerMin = b.optInt("triggerMinutes", 5);
+                        int toleranceSec = b.optInt("toleranceSeconds", 60);
+                        org.json.JSONArray appsArr = b.optJSONArray("apps");
+                        java.util.List<String> apps = new java.util.ArrayList<>();
+                        if (appsArr != null) {
+                            for (int j = 0; j < appsArr.length(); j++) apps.add(appsArr.getString(j));
+                        }
+                        FloatingService.monitorBuckets.add(
+                            new FloatingService.BucketConfig(id, name, apps, triggerMin, toleranceSec, color));
+                    } catch (Exception e) {
+                        Log.w(TAG, "updateBucketMonitor: parse error at " + i, e);
+                    }
+                }
+            }
+            // 如果有桶配置，确保监控服务在跑
+            if (!FloatingService.monitorBuckets.isEmpty()) {
+                Intent intent = new Intent(getContext(), FloatingService.class);
+                intent.setAction("START_MONITOR");
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        getContext().startForegroundService(intent);
+                    } else {
+                        getContext().startService(intent);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "updateBucketMonitor: failed to start service", e);
+                }
+            }
+            call.resolve();
+        }
+
         @PluginMethod
         public void showBucketAlert(PluginCall call) {
             String bucketName = call.getString("bucketName", "");
