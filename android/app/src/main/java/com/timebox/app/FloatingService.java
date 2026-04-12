@@ -475,9 +475,19 @@ public class FloatingService extends Service {
         super.onDestroy();
     }
 
-    /** alert 消失后如果没有计时任务则停服务 */
+    /** alert 消失后如果没有计时任务且没有后台监控则停服务 */
     private void maybeStopIfIdle() {
         if (!isRunning && activeTasks.isEmpty()) {
+            if (bucketMonitor != null && bucketMonitor.isRunning()) {
+                // 后台监控仍在运行，不停服务，但切换通知为监控态
+                logD("maybeStopIfIdle: monitor still running, keeping service alive");
+                try {
+                    createNotificationChannel();
+                    NotificationManager nm = getSystemService(NotificationManager.class);
+                    if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
+                } catch (Exception ignored) {}
+                return;
+            }
             try { stopForeground(true); } catch (Exception ignored) {}
             stopSelf();
         }
