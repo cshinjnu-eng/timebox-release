@@ -27,20 +27,13 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.app.AppOpsManager;
-import android.app.usage.UsageEvents;
-import android.app.usage.UsageStatsManager;
-import android.content.pm.PackageManager;
-import android.os.Process;
 import androidx.core.app.NotificationCompat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class FloatingService extends Service {
@@ -51,29 +44,9 @@ public class FloatingService extends Service {
     private static final int MAX_DEBUG_LOGS = 200;
     private static final int DIAGNOSTIC_LOG_INTERVAL = 30; // 每 30 tick (30秒) 输出一次诊断
 
-    // ── 桶配置（JS → 原生，供后台监控使用） ────────────────────
-    public static class BucketConfig {
-        public String id;
-        public String name;
-        public List<String> apps; // display names (lower-cased for matching)
-        public int triggerMinutes;
-        public int toleranceSeconds;
-        public String color;
-
-        BucketConfig(String id, String name, List<String> apps,
-                     int triggerMinutes, int toleranceSeconds, String color) {
-            this.id = id; this.name = name; this.apps = apps;
-            this.triggerMinutes = triggerMinutes;
-            this.toleranceSeconds = toleranceSeconds;
-            this.color = color;
-        }
-    }
-
-    // 静态桶配置（从 JS 更新）
-    static final List<BucketConfig> monitorBuckets = new CopyOnWriteArrayList<>();
-    // 今日已触发过的桶id（跨启动用 SharedPreferences 持久化，这里内存缓存）
-    static final List<String> firedTodayBuckets = new CopyOnWriteArrayList<>();
-    static volatile String firedTodayDate = "";
+    // ── 桶监控 & Alert 委托 ────────────────────────────────────
+    private BucketMonitorManager bucketMonitor;
+    private BucketAlertHelper bucketAlert;
 
     // ── 待确认桶检测（原生确认按钮 → JS 消费） ─────────────────
     public static class PendingBucketConfirm {
@@ -143,23 +116,12 @@ public class FloatingService extends Service {
     private View dividerView;            // header 下方分割线
     private boolean isCollapsed = false; // 折叠状态
 
-    // 桶检测 Alert 悬浮 banner（与计时 overlay 独立）
-    private View bucketAlertView = null;
-    private final Runnable alertAutoDismiss = this::removeBucketAlertOverlay;
-    private static final int NOTIF_ALERT_ID = 102;
-    private static final String ALERT_CHANNEL_ID = "bucket_alert_channel";
-
     // 向后兼容旧 getStatus() 接口
     private static volatile boolean isRunning = false;
 
     private PowerManager.WakeLock wakeLock;
     private int tickCount = 0;
     private long lastOverlayRecoveryMs = 0;
-
-    // 桶后台监控（每60s独立轮询，不依赖计时任务）
-    private final Handler monitorHandler = new Handler(Looper.getMainLooper());
-    private static final int MONITOR_INTERVAL_MS = 60_000;
-    private volatile boolean monitorRunning = false;
 
     // --- 静态日志缓冲区，供前端 getDiagnosticInfo() 读取 ---
     private static final List<String> debugLogs = Collections.synchronizedList(new ArrayList<>());
@@ -174,7 +136,7 @@ public class FloatingService extends Service {
             if (tasksNeedRebuild) {
                 tasksNeedRebuild = false;
                 if (activeTasks.isEmpty()) {
-                    if (bucketAlertView == null) {
+                    if (bucketAlert == null || !bucketAlert.isShowing()) {
                         logD("TICKER: no tasks, no alert, stopping service");
                         isRunning = false;
                         stopForeground(true);
@@ -268,6 +230,34 @@ public class FloatingService extends Service {
                 + ", isHonorOrHuawei=" + isHonorOrHuawei());
         createNotificationChannel();
 
+        // 初始化桶监控 & Alert 委托
+        bucketMonitor = new BucketMonitorManager(this, (bucket, durMin, isRealtime, trueStart, trueEnd) -> {
+            if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+            bucketMonitor.setAlertShowing(true);
+            bucketAlert.show(windowManager, bucket.id, bucket.name, durMin, bucket.color,
+                    isRealtime, trueStart, trueEnd, new BucketAlertHelper.AlertCallback() {
+                        @Override
+                        public void onConfirm(String bucketId, String bucketName, String colorHex,
+                                              int minutes, boolean rt, long ts, long te) {
+                            bucketMonitor.setAlertShowing(false);
+                            String mode = rt ? "realtime" : "retrospective";
+                            pendingBucketConfirm = new PendingBucketConfirm(
+                                    bucketId, bucketName, "", "", colorHex, minutes, ts, te, mode);
+                            logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
+                            Intent openApp = new Intent(FloatingService.this, MainActivity.class);
+                            openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                            try { startActivity(openApp); } catch (Exception ignored) {}
+                            maybeStopIfIdle();
+                        }
+                        @Override
+                        public void onDismiss() {
+                            bucketMonitor.setAlertShowing(false);
+                            maybeStopIfIdle();
+                        }
+                    });
+        });
+        bucketAlert = new BucketAlertHelper(this);
+
         // 荣耀/华为设备获取 WakeLock 防止 CPU 休眠杀 timer
         if (isHonorOrHuawei()) {
             acquireWakeLock();
@@ -286,8 +276,7 @@ public class FloatingService extends Service {
                 tasksNeedRebuild = true;
                 isRunning = false;
                 handler.removeCallbacks(ticker);
-                handler.removeCallbacks(alertAutoDismiss);
-                removeBucketAlertOverlay();
+                if (bucketAlert != null) bucketAlert.remove();
                 releaseWakeLock();
                 stopForeground(true);
                 stopSelf();
@@ -296,8 +285,7 @@ public class FloatingService extends Service {
 
             if ("START_MONITOR".equals(action)) {
                 logD("START_MONITOR: starting bucket background polling");
-                startBucketMonitor();
-                // 确保服务以 foreground 方式运行（如果还没有计时任务）
+                bucketMonitor.start();
                 if (!isRunning) {
                     try {
                         createNotificationChannel();
@@ -309,8 +297,8 @@ public class FloatingService extends Service {
 
             if ("STOP_MONITOR".equals(action)) {
                 logD("STOP_MONITOR: stopping bucket background polling");
-                stopBucketMonitor();
-                if (!isRunning && activeTasks.isEmpty() && bucketAlertView == null) {
+                bucketMonitor.stop();
+                if (!isRunning && activeTasks.isEmpty() && (bucketAlert == null || !bucketAlert.isShowing())) {
                     stopForeground(true); stopSelf();
                 }
                 return START_NOT_STICKY;
@@ -326,21 +314,37 @@ public class FloatingService extends Service {
                 long bEnd = intent.getLongExtra("trueEnd", 0);
                 logD("BUCKET_ALERT: name=" + bName + ", min=" + bMinutes + ", realtime=" + bRealtime);
                 if (!isRunning && activeTasks.isEmpty()) {
-                    // 无计时任务：启动服务仅用于显示 alert
                     try {
-                        createAlertNotificationChannel();
-                        startForeground(NOTIF_ALERT_ID, buildAlertNotification(bName));
+                        BucketAlertHelper.createAlertNotificationChannel(this);
+                        startForeground(BucketAlertHelper.NOTIF_ALERT_ID,
+                                BucketAlertHelper.buildAlertNotification(this, bName));
                     } catch (Exception e) { logE("BUCKET_ALERT: startForeground failed", e); }
                 }
                 if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-                showBucketAlertOverlay(bId != null ? bId : "", bName, bMinutes, bColor, bRealtime, bStart, bEnd);
+                bucketAlert.show(windowManager, bId != null ? bId : "", bName, bMinutes, bColor,
+                        bRealtime, bStart, bEnd, new BucketAlertHelper.AlertCallback() {
+                            @Override
+                            public void onConfirm(String bucketId, String bucketName, String colorHex,
+                                                  int minutes, boolean rt, long ts, long te) {
+                                String mode = rt ? "realtime" : "retrospective";
+                                pendingBucketConfirm = new PendingBucketConfirm(
+                                        bucketId, bucketName, "", "", colorHex, minutes, ts, te, mode);
+                                logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
+                                Intent openApp = new Intent(FloatingService.this, MainActivity.class);
+                                openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                                try { startActivity(openApp); } catch (Exception ignored) {}
+                                maybeStopIfIdle();
+                            }
+                            @Override
+                            public void onDismiss() { maybeStopIfIdle(); }
+                        });
                 return START_NOT_STICKY;
             }
 
             if ("DISMISS_BUCKET_ALERT".equals(action)) {
                 logD("DISMISS_BUCKET_ALERT");
-                handler.removeCallbacks(alertAutoDismiss);
-                removeBucketAlertOverlay();
+                if (bucketAlert != null) bucketAlert.remove();
+                maybeStopIfIdle();
                 return START_NOT_STICKY;
             }
 
@@ -401,15 +405,15 @@ public class FloatingService extends Service {
         } else {
             logD("onStartCommand: intent is null (service restarted), flags=" + flags + " → reloading persisted buckets");
             // 服务被系统杀死后以 START_STICKY 重启：从 SharedPreferences 恢复桶配置并重启监控
-            loadBucketsFromPrefs();
-            if (!monitorBuckets.isEmpty()) {
+            bucketMonitor.loadBucketsFromPrefs();
+            if (bucketMonitor.hasBuckets()) {
                 if (!isRunning) {
                     try {
                         createNotificationChannel();
                         startForeground(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
                     } catch (Exception e) { logE("restart: startForeground failed", e); }
                 }
-                startBucketMonitor();
+                bucketMonitor.start();
             }
         }
         return START_STICKY;
@@ -462,17 +466,21 @@ public class FloatingService extends Service {
         logD("onDestroy: isRunning=" + isRunning);
         isRunning = false;
         handler.removeCallbacks(ticker);
-        handler.removeCallbacks(alertAutoDismiss);
-        stopBucketMonitor();
+        if (bucketMonitor != null) bucketMonitor.stop();
+        if (bucketAlert != null) bucketAlert.remove();
         releaseWakeLock();
         if (floatingView != null && windowManager != null) {
             try { windowManager.removeView(floatingView); } catch (Exception ignored) {}
         }
-        if (bucketAlertView != null && windowManager != null) {
-            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
-            bucketAlertView = null;
-        }
         super.onDestroy();
+    }
+
+    /** alert 消失后如果没有计时任务则停服务 */
+    private void maybeStopIfIdle() {
+        if (!isRunning && activeTasks.isEmpty()) {
+            try { stopForeground(true); } catch (Exception ignored) {}
+            stopSelf();
+        }
     }
 
     // ========== Overlay 管理 ==========
@@ -879,454 +887,8 @@ public class FloatingService extends Service {
         }
     }
 
-    // ========== 桶后台监控 ==========
-
-    private void loadBucketsFromPrefs() {
-        String json = getMonitorPrefs().getString("buckets_json", "");
-        if (json.isEmpty()) { logD("loadBucketsFromPrefs: no saved buckets"); return; }
-        monitorBuckets.clear();
-        try {
-            org.json.JSONArray arr = new org.json.JSONArray(json);
-            for (int i = 0; i < arr.length(); i++) {
-                org.json.JSONObject b = arr.getJSONObject(i);
-                String id = b.optString("id", "");
-                String name = b.optString("name", "");
-                String color = b.optString("color", "#F59E0B");
-                int tMin = b.optInt("triggerMinutes", 5);
-                int tSec = b.optInt("toleranceSeconds", 60);
-                org.json.JSONArray appsArr = b.optJSONArray("apps");
-                List<String> apps = new ArrayList<>();
-                if (appsArr != null) {
-                    for (int j = 0; j < appsArr.length(); j++) apps.add(appsArr.getString(j));
-                }
-                monitorBuckets.add(new BucketConfig(id, name, apps, tMin, tSec, color));
-            }
-            logD("loadBucketsFromPrefs: loaded " + monitorBuckets.size() + " buckets");
-        } catch (Exception e) {
-            logE("loadBucketsFromPrefs: parse error", e);
-        }
-    }
-
-    private void startBucketMonitor() {
-        if (monitorRunning) return;
-        monitorRunning = true;
-        monitorHandler.post(monitorRunnable);
-        logD("BucketMonitor: started, interval=" + MONITOR_INTERVAL_MS + "ms");
-    }
-
-    private void stopBucketMonitor() {
-        monitorRunning = false;
-        monitorHandler.removeCallbacks(monitorRunnable);
-        logD("BucketMonitor: stopped");
-    }
-
-    private final Runnable monitorRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (!monitorRunning) return;
-            checkBucketsNow();
-            monitorHandler.postDelayed(this, MONITOR_INTERVAL_MS);
-        }
-    };
-
-    // SharedPreferences key 前缀，用于持久化今日已触发桶
-    private static final String PREFS_NAME = "timebox_monitor";
-    private static final String PREFS_FIRED_DATE = "fired_date";
-    private static final String PREFS_FIRED_IDS = "fired_ids";
-
-    private android.content.SharedPreferences getMonitorPrefs() {
-        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-    }
-
-    /**
-     * 获取指定桶今日已"消费"（已触发过）的累计使用时长（毫秒）。
-     * 返回 0 表示今天从未触发。
-     * SharedPreferences 格式: fired_ids = "|bucketId:consumedMs||bucketId2:consumedMs2|"
-     */
-    private long getConsumedMs(String bucketId) {
-        android.content.SharedPreferences prefs = getMonitorPrefs();
-        java.util.Calendar cal = java.util.Calendar.getInstance();
-        String today = String.format(Locale.US, "%04d-%02d-%02d",
-                cal.get(java.util.Calendar.YEAR),
-                cal.get(java.util.Calendar.MONTH) + 1,
-                cal.get(java.util.Calendar.DAY_OF_MONTH));
-        String savedDate = prefs.getString(PREFS_FIRED_DATE, "");
-        if (!today.equals(savedDate)) return 0;
-        String savedIds = prefs.getString(PREFS_FIRED_IDS, "");
-        String token = "|" + bucketId + ":";
-        int idx = savedIds.lastIndexOf(token);
-        if (idx < 0) return 0;
-        int valStart = idx + token.length();
-        int valEnd = savedIds.indexOf("|", valStart);
-        if (valEnd < 0) return 0;
-        try {
-            long val = Long.parseLong(savedIds.substring(valStart, valEnd));
-            // 旧版存的是 System.currentTimeMillis() 时间戳（约1.7万亿ms），
-            // 新版存的是累计使用时长（正常不超过24小时=86400000ms）。
-            // 检测到旧数据时重置为0。
-            if (val > 86400000L) {
-                logD("BucketMonitor: detected stale timestamp " + val + " for bucket=" + bucketId + ", resetting to 0");
-                return 0;
-            }
-            return val;
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-
-    /**
-     * 记录桶已消费的累计使用时长。每次触发后更新为当前总时长。
-     */
-    private void setConsumedMs(String bucketId, long consumedMs) {
-        android.content.SharedPreferences prefs = getMonitorPrefs();
-        java.util.Calendar cal = java.util.Calendar.getInstance();
-        String today = String.format(Locale.US, "%04d-%02d-%02d",
-                cal.get(java.util.Calendar.YEAR),
-                cal.get(java.util.Calendar.MONTH) + 1,
-                cal.get(java.util.Calendar.DAY_OF_MONTH));
-        String savedDate = prefs.getString(PREFS_FIRED_DATE, "");
-        String ids = today.equals(savedDate) ? prefs.getString(PREFS_FIRED_IDS, "") : "";
-        // 移除旧的该桶记录（如有）
-        String token = "|" + bucketId + ":";
-        int oldIdx = ids.indexOf(token);
-        if (oldIdx >= 0) {
-            int oldEnd = ids.indexOf("|", oldIdx + token.length());
-            if (oldEnd >= 0) {
-                ids = ids.substring(0, oldIdx) + ids.substring(oldEnd);
-            }
-        }
-        // 追加新记录
-        ids = ids + "|" + bucketId + ":" + consumedMs + "|";
-        prefs.edit()
-             .putString(PREFS_FIRED_DATE, today)
-             .putString(PREFS_FIRED_IDS, ids)
-             .apply();
-    }
-
-    // AppName 简单 session 结构
-    private static class AppSession {
-        final String appName;
-        final long start, end;
-        AppSession(String appName, long start, long end) {
-            this.appName = appName; this.start = start; this.end = end;
-        }
-    }
-
-    private void checkBucketsNow() {
-        if (monitorBuckets.isEmpty()) return;
-        if (bucketAlertView != null) return; // 已有 banner，不重复触发
-        if (!hasUsagePermission()) { logD("BucketMonitor: no usage permission"); return; }
-
-        UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
-        if (usm == null) return;
-
-        long now = System.currentTimeMillis();
-        java.util.Calendar dayStartCal = java.util.Calendar.getInstance();
-        dayStartCal.set(java.util.Calendar.HOUR_OF_DAY, 0);
-        dayStartCal.set(java.util.Calendar.MINUTE, 0);
-        dayStartCal.set(java.util.Calendar.SECOND, 0);
-        dayStartCal.set(java.util.Calendar.MILLISECOND, 0);
-
-        // 解析今日所有 App 使用 session（直接存 displayName）
-        PackageManager pm = getPackageManager();
-        Map<String, Long> resumeMap = new HashMap<>();
-        Map<String, String> pkgToName = new HashMap<>();
-        List<AppSession> allSessions = new ArrayList<>();
-
-        android.app.usage.UsageEvents usageEvents = usm.queryEvents(dayStartCal.getTimeInMillis(), now);
-        while (usageEvents.hasNextEvent()) {
-            android.app.usage.UsageEvents.Event ev = new android.app.usage.UsageEvents.Event();
-            usageEvents.getNextEvent(ev);
-            String pkg = ev.getPackageName();
-
-            if (ev.getEventType() == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
-                resumeMap.put(pkg, ev.getTimeStamp());
-            } else if (ev.getEventType() == android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED) {
-                Long t0 = resumeMap.remove(pkg);
-                if (t0 != null && ev.getTimeStamp() - t0 >= 3000) {
-                    if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
-                    allSessions.add(new AppSession(pkgToName.get(pkg), t0, ev.getTimeStamp()));
-                }
-            }
-        }
-        // 仍在前台的 app
-        for (Map.Entry<String, Long> e : resumeMap.entrySet()) {
-            long dur = now - e.getValue();
-            if (dur >= 3000) {
-                String pkg = e.getKey();
-                if (!pkgToName.containsKey(pkg)) pkgToName.put(pkg, resolveAppName(pkg, pm));
-                allSessions.add(new AppSession(pkgToName.get(pkg), e.getValue(), now));
-            }
-        }
-
-        logD("BucketMonitor: scanned " + allSessions.size() + " sessions today, buckets=" + monitorBuckets.size());
-
-        for (BucketConfig bucket : monitorBuckets) {
-            long consumedMs = getConsumedMs(bucket.id);
-
-            // 收集属于该桶的所有 session（按 displayName 精确匹配，大小写不敏感）
-            List<AppSession> bSessions = new ArrayList<>();
-            for (AppSession s : allSessions) {
-                for (String a : bucket.apps) {
-                    if (a.toLowerCase(Locale.ROOT).equals(s.appName.toLowerCase(Locale.ROOT))) {
-                        bSessions.add(s); break;
-                    }
-                }
-            }
-
-            // 计算该桶今日总使用时长
-            long totalDurMs = 0;
-            for (AppSession s : bSessions) {
-                totalDurMs += (s.end - s.start);
-            }
-
-            // 未消费的新增使用时长 = 今日总时长 - 已消费时长
-            long unconsumedMs = totalDurMs - consumedMs;
-            long triggerMs = bucket.triggerMinutes * 60000L;
-
-            logD("BucketMonitor: checking bucket=" + bucket.name + " apps=" + bucket.apps
-                    + " trigMin=" + bucket.triggerMinutes
-                    + " totalMin=" + String.format(Locale.US, "%.1f", totalDurMs / 60000.0)
-                    + " consumedMin=" + String.format(Locale.US, "%.1f", consumedMs / 60000.0)
-                    + " unconsumedMin=" + String.format(Locale.US, "%.1f", unconsumedMs / 60000.0));
-
-            if (unconsumedMs < triggerMs) continue;
-
-            // 按时间排序，防抖合并（用于确定最近使用段的 trueStart/trueEnd）
-            if (bSessions.isEmpty()) continue;
-            bSessions.sort((a, b) -> Long.compare(a.start, b.start));
-            long segStart = bSessions.get(0).start, segEnd = bSessions.get(0).end;
-            List<long[]> segments = new ArrayList<>();
-            for (int i = 1; i < bSessions.size(); i++) {
-                if (bSessions.get(i).start - segEnd <= bucket.toleranceSeconds * 1000L) {
-                    segEnd = Math.max(segEnd, bSessions.get(i).end);
-                } else {
-                    segments.add(new long[]{ segStart, segEnd });
-                    segStart = bSessions.get(i).start; segEnd = bSessions.get(i).end;
-                }
-            }
-            segments.add(new long[]{ segStart, segEnd });
-
-            // 取最新（最后一个）合并段作为展示给用户的时间区间
-            long[] latest = segments.get(segments.size() - 1);
-
-            int durMin = (int) Math.round(unconsumedMs / 60000.0);
-            boolean isRealtime = (now - latest[1]) <= 10 * 60000L;
-            String mode = isRealtime ? "realtime" : "retrospective";
-            logD("BucketMonitor: TRIGGER bucket=" + bucket.name + " dur=" + durMin + "min mode=" + mode
-                    + " newConsumed=" + String.format(Locale.US, "%.1f", totalDurMs / 60000.0) + "min");
-
-            // 把当前总时长记为已消费，下次只有新增使用超过阈值才会再次触发
-            setConsumedMs(bucket.id, totalDurMs);
-            if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-            showBucketAlertOverlay(bucket.id, bucket.name, durMin, bucket.color, isRealtime, latest[0], latest[1]);
-            break; // 一次只弹一个
-        }
-    }
-
-    private boolean hasUsagePermission() {
-        AppOpsManager aom = (AppOpsManager) getSystemService(Context.APP_OPS_SERVICE);
-        if (aom == null) return false;
-        int mode;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            mode = aom.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(), getPackageName());
-        } else {
-            mode = aom.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(), getPackageName());
-        }
-        return mode == AppOpsManager.MODE_ALLOWED;
-    }
-
-    private String resolveAppName(String pkg, PackageManager pm) {
-        try {
-            android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return pm.getApplicationLabel(ai).toString();
-        } catch (PackageManager.NameNotFoundException e) {
-            int dot = pkg.lastIndexOf('.');
-            return dot >= 0 ? pkg.substring(dot + 1) : pkg;
-        }
-    }
-
-    // ========== 桶检测 Alert 悬浮 banner ==========
-
-    private void showBucketAlertOverlay(String bucketId, String bucketName, int minutes, String colorHex, boolean isRealtime, long trueStart, long trueEnd) {
-        if (!Settings.canDrawOverlays(this)) {
-            logD("showBucketAlert: no overlay permission");
-            return;
-        }
-        handler.removeCallbacks(alertAutoDismiss);
-        if (bucketAlertView != null) {
-            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
-            bucketAlertView = null;
-        }
-        if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-
-        int parsedColor;
-        try { parsedColor = Color.parseColor(colorHex != null ? colorHex : "#F59E0B"); }
-        catch (Exception e) { parsedColor = Color.parseColor("#F59E0B"); }
-        final int accentColor = parsedColor;
-
-        // ── 根容器 ──
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable rootBg = new GradientDrawable();
-        rootBg.setColor(Color.parseColor("#F0161820"));
-        rootBg.setCornerRadius(dp(12));
-        rootBg.setStroke(dp(1), Color.parseColor("#2A2D3A"));
-        root.setBackground(rootBg);
-        root.setPadding(dp(14), dp(12), dp(14), dp(12));
-        root.setElevation(dp(8));
-
-        // ── 顶行：图标 + 文字 + 关闭按钮 ──
-        LinearLayout topRow = new LinearLayout(this);
-        topRow.setOrientation(LinearLayout.HORIZONTAL);
-        topRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-
-        // 色条（左侧装饰）
-        android.view.View accent = new android.view.View(this);
-        GradientDrawable accentBg = new GradientDrawable();
-        accentBg.setColor(accentColor);
-        accentBg.setCornerRadius(dp(2));
-        accent.setBackground(accentBg);
-        LinearLayout.LayoutParams accentP = new LinearLayout.LayoutParams(dp(3), dp(32));
-        accentP.setMarginEnd(dp(10));
-        topRow.addView(accent, accentP);
-
-        // 文字（弹性）
-        LinearLayout textCol = new LinearLayout(this);
-        textCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams textColP = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        textColP.setMarginEnd(dp(10));
-
-        TextView titleView = new TextView(this);
-        titleView.setText("检测到「" + bucketName + "」");
-        titleView.setTextColor(Color.parseColor("#E8EAF0"));
-        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        titleView.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-
-        TextView subView = new TextView(this);
-        subView.setText(isRealtime
-                ? "已连续使用约 " + minutes + " 分钟，开始计时？"
-                : "已使用约 " + minutes + " 分钟，记录为历史？");
-        subView.setTextColor(Color.parseColor("#8B8FA8"));
-        subView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
-
-        textCol.addView(titleView);
-        textCol.addView(subView);
-        topRow.addView(textCol, textColP);
-
-        // 关闭按钮
-        TextView closeBtn = new TextView(this);
-        closeBtn.setText("✕");
-        closeBtn.setTextColor(Color.parseColor("#525675"));
-        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        closeBtn.setPadding(dp(6), dp(2), 0, dp(2));
-        closeBtn.setOnClickListener(v -> {
-            handler.removeCallbacks(alertAutoDismiss);
-            removeBucketAlertOverlay();
-        });
-        topRow.addView(closeBtn);
-        root.addView(topRow);
-
-        // ── 按钮行 ──
-        LinearLayout btnRow = new LinearLayout(this);
-        btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        btnRow.setGravity(android.view.Gravity.END);
-        LinearLayout.LayoutParams btnRowP = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        btnRowP.topMargin = dp(10);
-
-        // 确认计时 → 打开 App
-        TextView confirmBtn = new TextView(this);
-        confirmBtn.setText(isRealtime ? "确认计时 →" : "记录使用 →");
-        confirmBtn.setTextColor(Color.WHITE);
-        confirmBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        confirmBtn.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        GradientDrawable confirmBg = new GradientDrawable();
-        confirmBg.setColor(accentColor);
-        confirmBg.setCornerRadius(dp(8));
-        confirmBtn.setBackground(confirmBg);
-        confirmBtn.setPadding(dp(14), dp(8), dp(14), dp(8));
-        confirmBtn.setOnClickListener(v -> {
-            handler.removeCallbacks(alertAutoDismiss);
-            removeBucketAlertOverlay();
-            // 设置 pending 数据供 JS 消费
-            String mode = isRealtime ? "realtime" : "retrospective";
-            pendingBucketConfirm = new PendingBucketConfirm(
-                    bucketId, bucketName, "", "", colorHex, minutes, trueStart, trueEnd, mode);
-            logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
-            Intent openApp = new Intent(FloatingService.this, MainActivity.class);
-            openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-            try { startActivity(openApp); } catch (Exception ignored) {}
-        });
-        btnRow.addView(confirmBtn);
-        root.addView(btnRow, btnRowP);
-
-        // ── 加入 WindowManager ──
-        int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                : WindowManager.LayoutParams.TYPE_PHONE;
-        WindowManager.LayoutParams alertParams = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                PixelFormat.TRANSLUCENT);
-        alertParams.gravity = android.view.Gravity.TOP | android.view.Gravity.FILL_HORIZONTAL;
-        alertParams.x = dp(12);
-        alertParams.y = dp(60); // 状态栏下方
-        alertParams.width = WindowManager.LayoutParams.MATCH_PARENT;
-
-        // 修正：用 MATCH_PARENT 时 x margin 通过 padding 控制
-        root.setPadding(dp(14), dp(12), dp(14), dp(12));
-
-        try {
-            windowManager.addView(root, alertParams);
-            bucketAlertView = root;
-            logD("showBucketAlert: overlay added for " + bucketName);
-        } catch (Exception e) {
-            logE("showBucketAlert: addView failed", e);
-        }
-
-        // 15秒后自动消失
-        handler.postDelayed(alertAutoDismiss, 15000);
-    }
-
-    private void removeBucketAlertOverlay() {
-        if (bucketAlertView != null && windowManager != null) {
-            try { windowManager.removeView(bucketAlertView); } catch (Exception ignored) {}
-            bucketAlertView = null;
-            logD("removeBucketAlert: overlay removed");
-        }
-        // 仅用于显示 alert 的模式：无任务则停止服务
-        if (!isRunning || activeTasks.isEmpty()) {
-            try { stopForeground(true); } catch (Exception ignored) {}
-            stopSelf();
-        }
-    }
-
-    private void createAlertNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    ALERT_CHANNEL_ID, "TimeBox 使用检测", NotificationManager.IMPORTANCE_DEFAULT);
-            channel.setShowBadge(true);
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) nm.createNotificationChannel(channel);
-        }
-    }
-
-    private Notification buildAlertNotification(String bucketName) {
-        Intent ni = new Intent(this, MainActivity.class);
-        ni.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        PendingIntent pi = PendingIntent.getActivity(this, 1, ni,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-                .setContentTitle("检测到「" + bucketName + "」使用")
-                .setContentText("点击进入 TimeBox 确认计时")
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setAutoCancel(true)
-                .setContentIntent(pi)
-                .build();
+    /** 公共日志方法，供 BucketMonitorManager / BucketAlertHelper 调用 */
+    public static void addLog(String level, String msg) {
+        addDebugLog(level, msg);
     }
 }

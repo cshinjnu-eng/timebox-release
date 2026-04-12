@@ -361,7 +361,7 @@ public class MainActivity extends BridgeActivity {
         public void updateBucketMonitor(PluginCall call) {
             com.getcapacitor.JSArray buckets = call.getArray("buckets");
             Log.d(TAG, "updateBucketMonitor: count=" + (buckets != null ? buckets.length() : 0));
-            FloatingService.monitorBuckets.clear();
+            BucketMonitorManager.monitorBuckets.clear();
             if (buckets != null) {
                 for (int i = 0; i < buckets.length(); i++) {
                     try {
@@ -376,8 +376,8 @@ public class MainActivity extends BridgeActivity {
                         if (appsArr != null) {
                             for (int j = 0; j < appsArr.length(); j++) apps.add(appsArr.getString(j));
                         }
-                        FloatingService.monitorBuckets.add(
-                            new FloatingService.BucketConfig(id, name, apps, triggerMin, toleranceSec, color));
+                        BucketMonitorManager.monitorBuckets.add(
+                            new BucketMonitorManager.BucketConfig(id, name, apps, triggerMin, toleranceSec, color));
                     } catch (Exception e) {
                         Log.w(TAG, "updateBucketMonitor: parse error at " + i, e);
                     }
@@ -386,7 +386,7 @@ public class MainActivity extends BridgeActivity {
             // 持久化桶配置，供服务重启后恢复
             try {
                 org.json.JSONArray savedArr = new org.json.JSONArray();
-                for (FloatingService.BucketConfig bc : FloatingService.monitorBuckets) {
+                for (BucketMonitorManager.BucketConfig bc : BucketMonitorManager.monitorBuckets) {
                     org.json.JSONObject obj = new org.json.JSONObject();
                     obj.put("id", bc.id); obj.put("name", bc.name);
                     obj.put("color", bc.color);
@@ -404,7 +404,7 @@ public class MainActivity extends BridgeActivity {
                 Log.w(TAG, "updateBucketMonitor: failed to persist buckets", e);
             }
             // 如果有桶配置，确保监控服务在跑
-            if (!FloatingService.monitorBuckets.isEmpty()) {
+            if (!BucketMonitorManager.monitorBuckets.isEmpty()) {
                 Intent intent = new Intent(getContext(), FloatingService.class);
                 intent.setAction("START_MONITOR");
                 try {
