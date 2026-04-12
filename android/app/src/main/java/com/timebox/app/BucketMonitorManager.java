@@ -197,12 +197,19 @@ public class BucketMonitorManager {
 
             int durMin = (int) Math.round(unconsumedMs / 60000.0);
             boolean isRealtime = (now - latest[1]) <= 10 * 60000L;
+
+            // JS 端用 (Date.now() - trueStart) 算 elapsed，或 (trueEnd - trueStart) 算 duration。
+            // 所以 trueStart 应为 now - unconsumedMs，trueEnd 为 now，保证反映真实总时长。
+            long effectiveStart = now - unconsumedMs;
+            long effectiveEnd = now;
+
             logD("BucketMonitor: TRIGGER bucket=" + bucket.name + " dur=" + durMin + "min"
                     + " mode=" + (isRealtime ? "realtime" : "retrospective")
-                    + " newConsumed=" + fmtMin(totalDurMs) + "min");
+                    + " newConsumed=" + fmtMin(totalDurMs) + "min"
+                    + " effectiveStart=" + effectiveStart + " effectiveEnd=" + effectiveEnd);
 
             setConsumedMs(bucket.id, totalDurMs);
-            callback.onTriggered(bucket, durMin, isRealtime, latest[0], latest[1]);
+            callback.onTriggered(bucket, durMin, isRealtime, effectiveStart, effectiveEnd);
             break; // 一次只弹一个
         }
     }
