@@ -156,7 +156,7 @@ function ScreenBlock({
           }}
         >
           <p style={{ fontSize: 11, fontWeight: 600, color: "#E8EAF0" }}>{appName}</p>
-          <p style={{ fontSize: 10, color, fontFamily: "monospace" }}>{duration}</p>
+          <p style={{ fontSize: 10, color, fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)" }}>{duration}</p>
         </div>
       )}
     </div>
@@ -331,7 +331,7 @@ export function Timeline() {
               <ChevronLeft size={14} />
             </button>
             <span
-              className="px-3"
+              className="px-3 tb-mono"
               style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600, minWidth: 48, textAlign: "center" }}
             >
               {dayLabel}
@@ -387,14 +387,14 @@ export function Timeline() {
             <div className="flex items-center gap-2">
               <Clock size={13} style={{ color: "#4F7FFF" }} />
               <span style={{ fontSize: 12, color: "#8B8FA8" }}>学习/工作</span>
-              <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "monospace", color: "#4F7FFF" }}>
+              <span className="tb-timer" style={{ fontSize: 14, fontWeight: 700, color: "#4F7FFF" }}>
                 {totalHours}h {totalMin}m
               </span>
             </div>
             <div className="flex items-center gap-2">
               <Layers size={13} style={{ color: "#A855F7" }} />
               <span style={{ fontSize: 12, color: "#8B8FA8" }}>记录数</span>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "#A855F7" }}>
+              <span className="tb-mono" style={{ fontSize: 14, fontWeight: 700, color: "#A855F7" }}>
                 {filteredSessions.length}
               </span>
             </div>
@@ -402,7 +402,7 @@ export function Timeline() {
               <div className="flex items-center gap-2">
                 <Smartphone size={13} style={{ color: "#06B6D4" }} />
                 <span style={{ fontSize: 12, color: "#8B8FA8" }}>屏幕会话</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#06B6D4" }}>
+                <span className="tb-mono" style={{ fontSize: 14, fontWeight: 700, color: "#06B6D4" }}>
                   {screenBlocks.length}
                 </span>
               </div>
@@ -487,8 +487,16 @@ export function Timeline() {
                   style={{ top: nowLineTop }}
                 >
                   <div className="flex items-center" style={{ transform: "translateY(-50%)" }}>
-                    <div className="rounded-full flex-shrink-0" style={{ width: 8, height: 8, background: "#EF4444" }} />
-                    <div className="flex-1" style={{ height: 1.5, background: "#EF444466" }} />
+                    <div
+                      className="rounded-full flex-shrink-0"
+                      style={{
+                        width: 8,
+                        height: 8,
+                        background: "#EF4444",
+                        boxShadow: "0 0 8px rgba(239, 68, 68, 0.5), 0 0 2px #EF4444",
+                      }}
+                    />
+                    <div className="flex-1" style={{ height: 1.5, background: "linear-gradient(90deg, #EF444488, #EF444422)" }} />
                   </div>
                 </div>
               )}
@@ -515,7 +523,7 @@ export function Timeline() {
 
               {filteredSessions.length === 0 && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ color: "#8B8FA8" }}>
-                  <GitBranch size={32} style={{ marginBottom: 10, opacity: 0.3 }} />
+                  <GitBranch size={32} style={{ marginBottom: 10, opacity: 0.25, filter: "drop-shadow(0 0 8px rgba(168, 85, 247, 0.15))" }} />
                   <p style={{ fontSize: 13 }}>该时段暂无工作记录</p>
                 </div>
               )}
@@ -615,7 +623,7 @@ export function Timeline() {
                         style={{ height: "100%", width: `${pct}%`, background: cat.color, transition: "width 0.5s ease" }}
                       />
                     </div>
-                    <p style={{ fontSize: 11, color: cat.color, fontFamily: "monospace", marginTop: 2 }}>
+                    <p className="tb-mono" style={{ fontSize: 11, color: cat.color, marginTop: 2 }}>
                       {formatDuration(total)}
                     </p>
                   </div>

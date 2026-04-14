@@ -14,7 +14,7 @@ function defaultStart() {
 }
 
 export function NewLongTaskDialog() {
-  const { setShowNewLongTaskDialog, addLongTask } = useApp();
+  const { setShowNewLongTaskDialog, addLongTask, userTags, addUserTag } = useApp();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("工作");
@@ -33,6 +33,8 @@ export function NewLongTaskDialog() {
 
   function handleSubmit() {
     if (!name.trim()) { setError("请输入任务名称"); return; }
+    // 保存用户自定义标签
+    tags.forEach((t) => addUserTag(t));
     addLongTask({
       name: name.trim(),
       description: description.trim(),
@@ -169,24 +171,65 @@ export function NewLongTaskDialog() {
               <label style={{ fontSize: 13, color: "#8B8FA8" }}>自定义标签</label>
               <span style={{ fontSize: 11, color: "#525675" }}>回车添加</span>
             </div>
-            <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 rounded-lg min-h-10" style={{ background: "#0B0D14", border: "1px solid #252836" }}>
-              {tags.map((t) => (
-                <span key={t} className="flex items-center gap-1 px-2 py-0.5 rounded-md" style={{ background: "#252836", color: "#A0A3B8", fontSize: 12 }}>
-                  <Hash size={10} style={{ color: "#525675" }} />
-                  {t}
-                  <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ color: "#8B8FA8", lineHeight: 1, marginLeft: 2 }}>
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-              <input
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); } }}
-                placeholder={tags.length === 0 ? "输入标签后按 Enter..." : ""}
-                className="outline-none flex-1 min-w-16 bg-transparent"
-                style={{ color: "#E8EAF0", fontSize: 13 }}
-              />
+            <div className="relative">
+              <div className="flex items-center flex-wrap gap-1.5 px-3 py-2 rounded-lg min-h-10" style={{ background: "#0B0D14", border: "1px solid #252836" }}>
+                {tags.map((t) => (
+                  <span key={t} className="flex items-center gap-1 px-2 py-0.5 rounded-md" style={{ background: "#252836", color: "#A0A3B8", fontSize: 12 }}>
+                    <Hash size={10} style={{ color: "#525675" }} />
+                    {t}
+                    <button onClick={() => setTags(tags.filter(x => x !== t))} style={{ color: "#8B8FA8", lineHeight: 1, marginLeft: 2 }}>
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Tab" && tagInput.trim()) {
+                      const suggestions = userTags
+                        .filter((ut) => ut.name.toLowerCase().includes(tagInput.toLowerCase()) && !tags.includes(ut.name))
+                        .sort((a, b) => b.usageCount - a.usageCount);
+                      if (suggestions.length > 0) {
+                        e.preventDefault();
+                        setTags([...tags, suggestions[0].name]);
+                        setTagInput("");
+                      }
+                    }
+                    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(); }
+                  }}
+                  placeholder={tags.length === 0 ? "输入标签后按 Enter..." : ""}
+                  className="outline-none flex-1 min-w-16 bg-transparent"
+                  style={{ color: "#E8EAF0", fontSize: 13 }}
+                />
+              </div>
+              {/* Autocomplete dropdown */}
+              {tagInput.trim() && (() => {
+                const suggestions = userTags
+                  .filter((ut) => ut.name.toLowerCase().includes(tagInput.toLowerCase()) && !tags.includes(ut.name))
+                  .sort((a, b) => b.usageCount - a.usageCount)
+                  .slice(0, 5);
+                if (suggestions.length === 0) return null;
+                return (
+                  <div
+                    className="absolute left-0 right-0 rounded-lg overflow-hidden z-10"
+                    style={{ top: "100%", marginTop: 4, background: "#1A1D29", border: "1px solid #252836", boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}
+                  >
+                    {suggestions.map((s) => (
+                      <button
+                        key={s.name}
+                        onClick={() => { setTags([...tags, s.name]); setTagInput(""); }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-left transition-colors"
+                        style={{ fontSize: 13, color: "#E8EAF0" }}
+                      >
+                        <Hash size={10} style={{ color: "#525675" }} />
+                        <span className="flex-1">{s.name}</span>
+                        <span className="tb-mono" style={{ fontSize: 10, color: "#525675" }}>{s.usageCount}次</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

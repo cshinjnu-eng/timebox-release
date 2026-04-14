@@ -12,6 +12,17 @@ import {
   deleteEvent,
   getEventsByBucket,
   clearAllData as clearAllDataDB,
+  saveIdea as saveIdeaDB,
+  deleteIdea as deleteIdeaDB,
+  getAllIdeas,
+  saveMilestone as saveMilestoneDB,
+  deleteMilestone as deleteMilestoneDB,
+  getAllMilestones,
+  saveIdeaTask as saveIdeaTaskDB,
+  deleteIdeaTask as deleteIdeaTaskDB,
+  getAllIdeaTasks,
+  saveUserTag as saveUserTagDB,
+  getAllUserTags,
   type EventRecord,
 } from "../services/db";
 import { downloadCSV } from "../services/exportCSV";
@@ -140,6 +151,87 @@ export interface BucketDetection {
   // realtime: 用户仍在或刚离开，创建运行中的计时任务（回填已用时间）
 }
 
+// ─── 点子生命周期数据模型 ─────────────────────────────────────────────
+
+export const IDEA_CATEGORIES = [
+  { name: "科研", color: "#A855F7", bg: "rgba(168,85,247,0.15)" },
+  { name: "产品", color: "#4F7FFF", bg: "rgba(79,127,255,0.15)" },
+  { name: "品牌", color: "#EC4899", bg: "rgba(236,72,153,0.15)" },
+  { name: "课业", color: "#F59E0B", bg: "rgba(245,158,11,0.15)" },
+  { name: "生活", color: "#10B981", bg: "rgba(16,185,129,0.15)" },
+];
+
+export function getIdeaCategoryInfo(name: string) {
+  return IDEA_CATEGORIES.find((c) => c.name === name) || IDEA_CATEGORIES[0];
+}
+
+export interface IdeaEvaluation {
+  feasibility: number | null;   // 1-5
+  necessity: number | null;     // 1-5
+  impact: number | null;        // 1-5
+  timeEstimate: number | null;  // hours
+  score: number | null;         // weighted average
+  evaluatedAt: string | null;
+}
+
+export interface Idea {
+  id: string;
+  title: string;
+  description: string;
+  stage: "inbox" | "evaluated" | "active" | "completed" | "archived";
+  evaluation: IdeaEvaluation;
+  category: string;
+  tags: string[];
+  totalTimeSpent: number;  // seconds, aggregated from tasks
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface Milestone {
+  id: string;
+  ideaId: string;
+  title: string;
+  description: string;
+  sortOrder: number;
+  status: "pending" | "in_progress" | "completed";
+  deadline: string | null;
+  totalTimeSpent: number;
+  completedAt: string | null;
+}
+
+export interface IdeaTask {
+  id: string;
+  ideaId: string;
+  milestoneId: string | null;
+  title: string;
+  status: "pending" | "in_progress" | "completed";
+  priority: number;           // 0-5 (P0-P5)
+  deadline: string | null;
+  estimatedMinutes: number;
+  totalTimeSpent: number;     // seconds
+  createdAt: string;
+  completedAt: string | null;
+  sortOrder: number;
+}
+
+// ─── 用户标签 ─────────────────────────────────────────────────────────
+
+export interface UserTag {
+  name: string;
+  usageCount: number;
+  lastUsed: string;
+}
+
+// ─── 点子分类 → 计时分类映射 ──────────────────────────────────────────
+
+const IDEA_TO_TIMER_CATEGORY: Record<string, string> = {
+  "科研": "学习",
+  "产品": "工作",
+  "品牌": "工作",
+  "课业": "学习",
+  "生活": "生活",
+};
+
 // ─── Context 类型 ──────────────────────────────────────────────────────
 interface AppContextType {
   tasks: Task[];
@@ -195,6 +287,28 @@ interface AppContextType {
   confirmBucketDetection: () => void;
   dismissBucketDetection: () => void;
   recentAppNames: string[];
+  // ─── 点子生命周期 ──────────────────────────────────
+  ideas: Idea[];
+  milestones: Milestone[];
+  ideaTasks: IdeaTask[];
+  captureIdea: (title: string, description?: string, category?: string) => void;
+  evaluateIdea: (id: string, scores: { feasibility: number; necessity: number; impact: number; timeEstimate: number }) => void;
+  promoteIdea: (id: string) => void;
+  archiveIdea: (id: string) => void;
+  completeIdea: (id: string) => void;
+  updateIdea: (id: string, updates: Partial<Idea>) => void;
+  deleteIdeaFn: (id: string) => void;
+  addMilestone: (ideaId: string, data: { title: string; description?: string; deadline?: string }) => void;
+  updateMilestone: (id: string, updates: Partial<Milestone>) => void;
+  deleteMilestoneFn: (id: string) => void;
+  addIdeaTask: (ideaId: string, milestoneId: string | null, data: { title: string; priority?: number; estimatedMinutes?: number; deadline?: string }) => void;
+  updateIdeaTask: (id: string, updates: Partial<IdeaTask>) => void;
+  deleteIdeaTaskFn: (id: string) => void;
+  completeIdeaTask: (id: string) => void;
+  startIdeaTimer: (ideaTaskId: string) => void;
+  // User tags
+  userTags: UserTag[];
+  addUserTag: (name: string) => void;
   // Dialogs
   showNewTaskDialog: boolean;
   setShowNewTaskDialog: (v: boolean) => void;
@@ -410,6 +524,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [dbReady, setDbReady] = useState(false);
   const [manualPrefill, setManualPrefill] = useState<{ name: string; category: string; startTime: Date; endTime: Date } | null>(null);
 
+  // ─── 点子生命周期 state ────────────────────────────────────────────
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [ideaTasks, setIdeaTasks] = useState<IdeaTask[]>([]);
+  const [userTags, setUserTags] = useState<UserTag[]>([]);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Refs ──────────────────────────────────────────────────────────
@@ -423,68 +543,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   bucketsRef.current = appBuckets;
   const bucketDetectionRef = useRef<BucketDetection | null>(null);
   bucketDetectionRef.current = bucketDetection;
+  const ideasRef = useRef<Idea[]>([]);
+  ideasRef.current = ideas;
+  const milestonesRef = useRef<Milestone[]>([]);
+  milestonesRef.current = milestones;
+  const ideaTasksRef = useRef<IdeaTask[]>([]);
+  ideaTasksRef.current = ideaTasks;
+  const userTagsRef = useRef<UserTag[]>([]);
+  userTagsRef.current = userTags;
 
-  // ─── 前台切换时重触发桶检测（用户从原生悬浮条点击进入 App）──────────
-  // 同时消费原生侧的 pendingBucketConfirm（用户已在悬浮窗点了确认，直接创建任务）
-  const consumePendingBucketConfirm = useCallback(async () => {
-    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
-    try {
-      const res = await FloatingWindow.getPendingBucketConfirm?.();
-      if (!res?.hasPending) return;
-      const { bucketId, bucketName, color, detectedMinutes, trueStart, trueEnd, mode } = res;
-      // 查找对应的桶配置获取 category / evalTag
-      const bucket = bucketsRef.current.find(b => b.id === bucketId);
-      const category = bucket?.category || "其他";
-      const evalTag = bucket?.evalTag || "";
-      const cat = getCategoryInfo(category);
-      const today = new Date().toISOString().slice(0, 10);
-      localStorage.setItem(`bucket_day_${bucketId}_${today}`, "confirmed");
-
-      if (mode === "retrospective") {
-        const session: WorkSession = {
-          id: makeId(), taskName: bucketName, category,
-          evalTag, color: color || cat.color,
-          startTime: new Date(trueStart), endTime: new Date(trueEnd),
-          duration: Math.round((trueEnd - trueStart) / 1000),
-          tags: [],
-        };
-        setSessions((prev) => [session, ...prev]);
-        saveEvent(sessionToEvent(session)).catch(console.warn);
-      } else {
-        const initialElapsed = Math.max(0, Math.floor((Date.now() - trueStart) / 1000));
-        const newTask: Task = {
-          id: makeId(), name: bucketName, category,
-          evalTag, color: color || cat.color, bgColor: cat.bg,
-          startTime: new Date(trueStart), elapsed: initialElapsed,
-          isRunning: true, tags: [],
-        };
-        setTasks((prev) => [...prev, newTask]);
-        saveEvent(taskToEvent(newTask)).catch(console.warn);
-        if (FloatingWindow) {
-          FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
-        }
-      }
-    } catch (_) { /* plugin method not available */ }
-  }, []);
-
+  // ─── 前台切换时重触发桶检测 ──────────────────────────────────────
   useEffect(() => {
     const handler = () => {
       if (document.visibilityState === "visible") {
         setVisibilityTick(t => t + 1);
-        // 延迟检查 pending（等 native activity 完全 resume）
-        setTimeout(() => consumePendingBucketConfirm(), 500);
       }
     };
     document.addEventListener("visibilitychange", handler);
     return () => document.removeEventListener("visibilitychange", handler);
-  }, [consumePendingBucketConfirm]);
-
-  // 兜底：App 已在前台时原生 confirm 不触发 visibilitychange，轮询检查 pending
-  useEffect(() => {
-    if (!dbReady || Capacitor.getPlatform() !== "android") return;
-    const timer = setInterval(() => consumePendingBucketConfirm(), 3000);
-    return () => clearInterval(timer);
-  }, [dbReady, consumePendingBucketConfirm]);
+  }, []);
 
   // ─── IndexedDB 初始化 ───────────────────────────────────────────────
   useEffect(() => {
@@ -503,6 +580,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (sessionEvents.length > 0) setSessions(sessionEvents.map(eventToSession));
         if (longTaskEvents.length > 0) setLongTasks(longTaskEvents.map(eventToLongTask));
         if (bucketEvents.length > 0) setAppBuckets(bucketEvents.map(eventToBucketConfig));
+
+        // ─── 加载点子生命周期数据 ─────────────────────────────
+        const [ideaRecords, msRecords, itRecords, tagRecords] = await Promise.all([
+          getAllIdeas(),
+          getAllMilestones(),
+          getAllIdeaTasks(),
+          getAllUserTags(),
+        ]);
+        if (ideaRecords.length > 0) setIdeas(ideaRecords as Idea[]);
+        if (msRecords.length > 0) setMilestones(msRecords as Milestone[]);
+        if (itRecords.length > 0) setIdeaTasks(itRecords as IdeaTask[]);
+        if (tagRecords.length > 0) setUserTags(tagRecords as UserTag[]);
       } catch (err) {
         console.warn("IndexedDB 加载失败", err);
       } finally {
@@ -577,18 +666,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
         } catch (e) { /* usage permission not granted */ }
 
-        // 推送桶配置给原生后台监控
-        try {
-          if (bucketsRef.current.length > 0) {
-            await FloatingWindow.updateBucketMonitor?.({
-              buckets: bucketsRef.current.map(b => ({
-                id: b.id, name: b.name, apps: b.apps,
-                triggerMinutes: b.triggerMinutes, toleranceSeconds: b.toleranceSeconds, color: b.color,
-              })),
-            });
-          }
-        } catch (_) { /* plugin method optional */ }
-
       }, 2000);
     }
   }, []);
@@ -633,34 +710,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
-  // ─── 应用桶检测：每次登录且 DB 加载完毕后执行一次今日扫描 ──────────
-  // 逻辑：扫描今天0点到现在的所有使用记录，找到所有符合条件的片段
-  // 用 localStorage 的 "bucket_day_{id}_{YYYY-MM-DD}" 键防止同一天重复提示
-  // 离开桶App超10分钟 → retrospective（补录已完成记录）
-  // 仍在使用或10分钟内离开 → realtime（开始计时）
+  // ─── 应用桶检测：每次进入 App 时扫描今日使用记录 ──────────────────
+  // 每次打开/切回前台都会重新检测，只跳过已确认或忽略的具体片段
+  // 将今天所有未确认片段的时长累计，展示总使用时长
   useEffect(() => {
     if (!dbReady || Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
     if (appBuckets.length === 0) return;
     if (bucketDetectionRef.current) return;
 
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-
     (async () => {
       try {
         const now = Date.now();
-        const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
-        const res = await FloatingWindow.getUsageEvents({ startTime: dayStart.getTime(), endTime: now });
+        const scanStart = new Date(); scanStart.setDate(scanStart.getDate() - 3); scanStart.setHours(0, 0, 0, 0);
+        const res = await FloatingWindow.getUsageEvents({ startTime: scanStart.getTime(), endTime: now });
         const allEvents: Array<{appName: string; start: number; end: number}> = res.sessions || [];
 
         for (const bucket of appBuckets) {
-          // 今天已经提示过（确认或忽略）→ 跳过
-          if (localStorage.getItem(`bucket_day_${bucket.id}_${today}`)) continue;
           // 已有同名运行中任务 → 跳过
           if (tasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
           if (longTasksRef.current.some(t => t.name === bucket.name && t.isRunning)) continue;
-          // 今天已有该桶对应的 session → 跳过
-          if (sessionsRef.current.some(s =>
-              s.taskName === bucket.name && s.startTime.getTime() >= dayStart.getTime())) continue;
 
           const bEvts = allEvents.filter(e =>
             bucket.apps.some(a => a.toLowerCase() === e.appName.toLowerCase()));
@@ -681,24 +749,32 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
           segments.push({ start: sStart, end: sEnd });
 
-          // 找符合阈值的片段（取最近的一个）
-          const qualifying = segments.filter(s => (s.end - s.start) / 60000 >= bucket.triggerMinutes);
-          if (qualifying.length === 0) continue;
-          const seg = qualifying[qualifying.length - 1]; // 最近的片段
+          // 过滤掉已确认/忽略的片段
+          const pending = segments.filter(s => {
+            const key = `bucket_seg_${bucket.id}_${Math.round(s.start / 1000)}`;
+            return !localStorage.getItem(key);
+          });
+          if (pending.length === 0) continue;
 
-          const durMin = Math.round((seg.end - seg.start) / 60000);
-          const mode = (now - seg.end) > 10 * 60000 ? "retrospective" : "realtime";
+          // 累计所有未确认片段的总时长
+          const totalMs = pending.reduce((sum, s) => sum + (s.end - s.start), 0);
+          const totalMin = Math.round(totalMs / 60000);
+          if (totalMin < bucket.triggerMinutes) continue;
+
+          // 用最近片段的时间作为横幅展示
+          const latestSeg = pending[pending.length - 1];
 
           setBucketDetection({
             bucketId: bucket.id, bucketName: bucket.name,
             category: bucket.category, evalTag: bucket.evalTag, color: bucket.color,
-            detectedMinutes: durMin, trueStart: seg.start, trueEnd: seg.end, mode,
-          });
+            detectedMinutes: totalMin,
+            trueStart: latestSeg.start, trueEnd: latestSeg.end,
+            mode: "retrospective",
+            // 记录所有待确认片段，确认时逐个创建 session
+            _pendingSegments: pending,
+            _pendingSegKeys: pending.map(s => `bucket_seg_${bucket.id}_${Math.round(s.start / 1000)}`),
+          } as any);
 
-          // realtime 模式同步触发悬浮窗提醒
-          if (mode === "realtime") {
-            try { FloatingWindow.showBucketAlert?.({ bucketName: bucket.name, detectedMinutes: durMin, color: bucket.color }); } catch(_) {}
-          }
           break; // 一次只提示一个桶
         }
       } catch (_) { /* usage permission not granted */ }
@@ -745,6 +821,48 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (Capacitor.getPlatform() === "android" && FloatingWindow) {
       if (!remaining.some((t) => t.isRunning)) FloatingWindow.stopFloating();
       else FloatingWindow.removeTask({ name: task.name });
+    }
+
+    // ─── 回写点子投入时间 ────────────────────────────────────────
+    const ideaTag = task.tags.find((t) => t.startsWith("idea_"));
+    if (ideaTag && task.elapsed > 0) {
+      const ideaId = ideaTag.replace("idea_", "");
+      // 更新 idea totalTimeSpent
+      setIdeas((prev) => prev.map((idea) => {
+        if (idea.id !== ideaId) return idea;
+        const updated = { ...idea, totalTimeSpent: idea.totalTimeSpent + task.elapsed };
+        saveIdeaDB(updated).catch(console.warn);
+        return updated;
+      }));
+      // 更新匹配的 ideaTask totalTimeSpent
+      const matchTask = ideaTasksRef.current.find((t) => t.ideaId === ideaId && t.title === task.name);
+      if (matchTask) {
+        setIdeaTasks((prev) => prev.map((t) => {
+          if (t.id !== matchTask.id) return t;
+          const updated = { ...t, totalTimeSpent: t.totalTimeSpent + task.elapsed };
+          saveIdeaTaskDB(updated).catch(console.warn);
+          return updated;
+        }));
+      }
+    }
+
+    // ─── 保存用户自定义标签 ──────────────────────────────────────
+    for (const tag of task.tags) {
+      if (!tag.startsWith("idea_")) {
+        const trimmed = tag.trim();
+        if (!trimmed) continue;
+        setUserTags((prev) => {
+          const existing = prev.find((ut) => ut.name === trimmed);
+          if (existing) {
+            const updated: UserTag = { ...existing, usageCount: existing.usageCount + 1, lastUsed: new Date().toISOString() };
+            saveUserTagDB(updated).catch(console.warn);
+            return prev.map((ut) => (ut.name === trimmed ? updated : ut));
+          }
+          const newTag: UserTag = { name: trimmed, usageCount: 1, lastUsed: new Date().toISOString() };
+          saveUserTagDB(newTag).catch(console.warn);
+          return [...prev, newTag];
+        });
+      }
     }
   }, []);
 
@@ -855,95 +973,279 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ─── 应用桶 ──────────────────────────────────────────────────────
-  function pushBucketsToMonitor(buckets: AppBucket[]) {
-    if (Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
-    try {
-      FloatingWindow.updateBucketMonitor?.({
-        buckets: buckets.map(b => ({
-          id: b.id, name: b.name, apps: b.apps,
-          triggerMinutes: b.triggerMinutes, toleranceSeconds: b.toleranceSeconds, color: b.color,
-        })),
-      });
-    } catch (_) {}
-  }
 
   const addBucket = useCallback((data: Omit<AppBucket, "id">) => {
     const newBucket: AppBucket = { id: makeId(), ...data };
-    setAppBuckets((prev) => {
-      const next = [...prev, newBucket];
-      pushBucketsToMonitor(next);
-      return next;
-    });
+    setAppBuckets((prev) => [...prev, newBucket]);
     saveEvent(bucketConfigToEvent(newBucket)).catch(console.warn);
   }, []);
 
   const updateBucket = useCallback((bucket: AppBucket) => {
-    setAppBuckets((prev) => {
-      const next = prev.map((b) => (b.id === bucket.id ? bucket : b));
-      pushBucketsToMonitor(next);
-      return next;
-    });
+    setAppBuckets((prev) => prev.map((b) => (b.id === bucket.id ? bucket : b)));
     saveEvent(bucketConfigToEvent(bucket)).catch(console.warn);
   }, []);
 
   const deleteBucket = useCallback((id: string) => {
-    setAppBuckets((prev) => {
-      const next = prev.filter((b) => b.id !== id);
-      pushBucketsToMonitor(next);
-      return next;
-    });
+    setAppBuckets((prev) => prev.filter((b) => b.id !== id));
     deleteEvent(id).catch(console.warn);
   }, []);
 
   const confirmBucketDetection = useCallback(() => {
-    const det = bucketDetectionRef.current;
+    const det = bucketDetectionRef.current as any;
     if (!det) return;
-    const today = new Date().toISOString().slice(0, 10);
-    localStorage.setItem(`bucket_day_${det.bucketId}_${today}`, "confirmed");
+    // 标记所有相关片段已确认
+    const keys: string[] = det._pendingSegKeys || [`bucket_seg_${det.bucketId}_${Math.round(det.trueStart / 1000)}`];
+    keys.forEach((k: string) => localStorage.setItem(k, "confirmed"));
     setBucketDetection(null);
-    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      try { FloatingWindow.dismissBucketAlert?.(); } catch(_) {}
-    }
-    const cat = getCategoryInfo(det.category);
 
-    if (det.mode === "retrospective") {
-      // 补录为已完成的时间记录（类似睡眠确认）
-      const session: WorkSession = {
-        id: makeId(), taskName: det.bucketName, category: det.category,
-        evalTag: det.evalTag, color: det.color,
-        startTime: new Date(det.trueStart), endTime: new Date(det.trueEnd),
-        duration: Math.round((det.trueEnd - det.trueStart) / 1000),
-        tags: [],
-      };
-      setSessions((prev) => [session, ...prev]);
-      saveEvent(sessionToEvent(session)).catch(console.warn);
-    } else {
-      // 实时：创建运行中的计时任务（回填已用时间）
-      const initialElapsed = Math.max(0, Math.floor((Date.now() - det.trueStart) / 1000));
-      const newTask: Task = {
-        id: makeId(), name: det.bucketName, category: det.category,
-        evalTag: det.evalTag, color: det.color, bgColor: cat.bg,
-        startTime: new Date(det.trueStart), elapsed: initialElapsed,
-        isRunning: true, tags: [],
-      };
-      setTasks((prev) => [...prev, newTask]);
-      saveEvent(taskToEvent(newTask)).catch(console.warn);
-      if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-        FloatingWindow.startFloating({ name: newTask.name, startTime: Date.now() - initialElapsed * 1000, elapsed: 0, color: newTask.color });
-      }
-    }
+    // 每个片段创建独立的 WorkSession（startTime~endTime 精确对应实际使用时段）
+    const segments: Array<{start: number; end: number}> = det._pendingSegments || [{ start: det.trueStart, end: det.trueEnd }];
+    const newSessions: WorkSession[] = segments.map(seg => ({
+      id: makeId(), taskName: det.bucketName, category: det.category,
+      evalTag: det.evalTag, color: det.color,
+      startTime: new Date(seg.start), endTime: new Date(seg.end),
+      duration: Math.round((seg.end - seg.start) / 1000),
+      tags: [],
+    }));
+    setSessions((prev) => [...newSessions, ...prev]);
+    newSessions.forEach(s => saveEvent(sessionToEvent(s)).catch(console.warn));
   }, []);
 
   const dismissBucketDetection = useCallback(() => {
-    const det = bucketDetectionRef.current;
+    const det = bucketDetectionRef.current as any;
     if (det) {
-      const today = new Date().toISOString().slice(0, 10);
-      localStorage.setItem(`bucket_day_${det.bucketId}_${today}`, "dismissed");
+      // 标记所有相关片段已忽略
+      const keys: string[] = det._pendingSegKeys || [`bucket_seg_${det.bucketId}_${Math.round(det.trueStart / 1000)}`];
+      keys.forEach((k: string) => localStorage.setItem(k, "dismissed"));
     }
     setBucketDetection(null);
-    if (Capacitor.getPlatform() === "android" && FloatingWindow) {
-      try { FloatingWindow.dismissBucketAlert?.(); } catch(_) {}
-    }
+  }, []);
+
+  // ─── 点子生命周期 CRUD ─────────────────────────────────────────────
+
+  const captureIdea = useCallback((title: string, description?: string, category?: string) => {
+    const now = new Date().toISOString();
+    const newIdea: Idea = {
+      id: `idea-${Date.now()}`,
+      title,
+      description: description || "",
+      stage: "inbox",
+      evaluation: { feasibility: null, necessity: null, impact: null, timeEstimate: null, score: null, evaluatedAt: null },
+      category: category || "产品",
+      tags: [],
+      totalTimeSpent: 0,
+      createdAt: now,
+      completedAt: null,
+    };
+    setIdeas((prev) => [newIdea, ...prev]);
+    saveIdeaDB(newIdea).catch(console.warn);
+  }, []);
+
+  const evaluateIdea = useCallback((id: string, scores: { feasibility: number; necessity: number; impact: number; timeEstimate: number }) => {
+    setIdeas((prev) => prev.map((idea) => {
+      if (idea.id !== id) return idea;
+      const score = Math.round(((scores.feasibility + scores.necessity + scores.impact) / 3) * 10) / 10;
+      const updated: Idea = {
+        ...idea,
+        stage: "evaluated",
+        evaluation: {
+          feasibility: scores.feasibility,
+          necessity: scores.necessity,
+          impact: scores.impact,
+          timeEstimate: scores.timeEstimate,
+          score,
+          evaluatedAt: new Date().toISOString(),
+        },
+      };
+      saveIdeaDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const promoteIdea = useCallback((id: string) => {
+    setIdeas((prev) => prev.map((idea) => {
+      if (idea.id !== id) return idea;
+      const updated = { ...idea, stage: "active" as const };
+      saveIdeaDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const archiveIdea = useCallback((id: string) => {
+    setIdeas((prev) => prev.map((idea) => {
+      if (idea.id !== id) return idea;
+      const updated = { ...idea, stage: "archived" as const };
+      saveIdeaDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const completeIdea = useCallback((id: string) => {
+    setIdeas((prev) => prev.map((idea) => {
+      if (idea.id !== id) return idea;
+      const updated = { ...idea, stage: "completed" as const, completedAt: new Date().toISOString() };
+      saveIdeaDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const updateIdeaFn = useCallback((id: string, updates: Partial<Idea>) => {
+    setIdeas((prev) => prev.map((idea) => {
+      if (idea.id !== id) return idea;
+      const updated = { ...idea, ...updates };
+      saveIdeaDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const deleteIdeaFn = useCallback((id: string) => {
+    setIdeas((prev) => prev.filter((i) => i.id !== id));
+    deleteIdeaDB(id).catch(console.warn);
+    // 级联删除关联的 milestones 和 tasks
+    const relatedMs = milestonesRef.current.filter((m) => m.ideaId === id);
+    const relatedTasks = ideaTasksRef.current.filter((t) => t.ideaId === id);
+    setMilestones((prev) => prev.filter((m) => m.ideaId !== id));
+    setIdeaTasks((prev) => prev.filter((t) => t.ideaId !== id));
+    relatedMs.forEach((m) => deleteMilestoneDB(m.id).catch(console.warn));
+    relatedTasks.forEach((t) => deleteIdeaTaskDB(t.id).catch(console.warn));
+  }, []);
+
+  // ─── 里程碑 CRUD ────────────────────────────────────────────────────
+
+  const addMilestoneFn = useCallback((ideaId: string, data: { title: string; description?: string; deadline?: string }) => {
+    const existing = milestonesRef.current.filter((m) => m.ideaId === ideaId);
+    const newMs: Milestone = {
+      id: `ms-${Date.now()}`,
+      ideaId,
+      title: data.title,
+      description: data.description || "",
+      sortOrder: existing.length,
+      status: "pending",
+      deadline: data.deadline || null,
+      totalTimeSpent: 0,
+      completedAt: null,
+    };
+    setMilestones((prev) => [...prev, newMs]);
+    saveMilestoneDB(newMs).catch(console.warn);
+  }, []);
+
+  const updateMilestoneFn = useCallback((id: string, updates: Partial<Milestone>) => {
+    setMilestones((prev) => prev.map((m) => {
+      if (m.id !== id) return m;
+      const updated = { ...m, ...updates };
+      saveMilestoneDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const deleteMilestoneFnCb = useCallback((id: string) => {
+    setMilestones((prev) => prev.filter((m) => m.id !== id));
+    deleteMilestoneDB(id).catch(console.warn);
+    // 归属该里程碑的任务 → milestoneId 置 null
+    setIdeaTasks((prev) => prev.map((t) => {
+      if (t.milestoneId !== id) return t;
+      const updated = { ...t, milestoneId: null };
+      saveIdeaTaskDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  // ─── 子任务 CRUD ────────────────────────────────────────────────────
+
+  const addIdeaTaskFn = useCallback((ideaId: string, milestoneId: string | null, data: { title: string; priority?: number; estimatedMinutes?: number; deadline?: string }) => {
+    const existing = ideaTasksRef.current.filter((t) => t.ideaId === ideaId && t.milestoneId === milestoneId);
+    const newTask: IdeaTask = {
+      id: `itask-${Date.now()}`,
+      ideaId,
+      milestoneId,
+      title: data.title,
+      status: "pending",
+      priority: data.priority ?? 3,
+      deadline: data.deadline || null,
+      estimatedMinutes: data.estimatedMinutes ?? 0,
+      totalTimeSpent: 0,
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      sortOrder: existing.length,
+    };
+    setIdeaTasks((prev) => [...prev, newTask]);
+    saveIdeaTaskDB(newTask).catch(console.warn);
+  }, []);
+
+  const updateIdeaTaskFn = useCallback((id: string, updates: Partial<IdeaTask>) => {
+    setIdeaTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const updated = { ...t, ...updates };
+      saveIdeaTaskDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  const deleteIdeaTaskFnCb = useCallback((id: string) => {
+    setIdeaTasks((prev) => prev.filter((t) => t.id !== id));
+    deleteIdeaTaskDB(id).catch(console.warn);
+  }, []);
+
+  const completeIdeaTaskFn = useCallback((id: string) => {
+    setIdeaTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const isCompleting = t.status !== "completed";
+      const updated: IdeaTask = {
+        ...t,
+        status: isCompleting ? "completed" : "pending",
+        completedAt: isCompleting ? new Date().toISOString() : null,
+      };
+      saveIdeaTaskDB(updated).catch(console.warn);
+      return updated;
+    }));
+  }, []);
+
+  // ─── 点子计时联动 ──────────────────────────────────────────────────
+  const startIdeaTimer = useCallback((ideaTaskId: string) => {
+    const ideaTask = ideaTasksRef.current.find((t) => t.id === ideaTaskId);
+    if (!ideaTask) return;
+    const idea = ideasRef.current.find((i) => i.id === ideaTask.ideaId);
+    if (!idea) return;
+
+    // 映射分类
+    const timerCategory = IDEA_TO_TIMER_CATEGORY[idea.category] || "工作";
+
+    // 合并标签：idea 关联 tag + idea 自身 tags
+    const tagSet = new Set<string>([`idea_${idea.id}`, idea.title, ...idea.tags]);
+    const tags = [...tagSet];
+
+    // 标记子任务为进行中
+    setIdeaTasks((prev) => prev.map((t) => {
+      if (t.id !== ideaTaskId) return t;
+      const updated = { ...t, status: "in_progress" as const };
+      saveIdeaTaskDB(updated).catch(console.warn);
+      return updated;
+    }));
+
+    // 创建计时任务
+    addTask({
+      name: ideaTask.title,
+      category: timerCategory,
+      tags,
+      estimatedMinutes: ideaTask.estimatedMinutes > 0 ? ideaTask.estimatedMinutes : undefined,
+    });
+  }, [addTask]);
+
+  // ─── 用户标签 ─────────────────────────────────────────────────────
+  const addUserTagFn = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setUserTags((prev) => {
+      const existing = prev.find((t) => t.name === trimmed);
+      if (existing) {
+        const updated: UserTag = { ...existing, usageCount: existing.usageCount + 1, lastUsed: new Date().toISOString() };
+        saveUserTagDB(updated).catch(console.warn);
+        return prev.map((t) => (t.name === trimmed ? updated : t));
+      }
+      const newTag: UserTag = { name: trimmed, usageCount: 1, lastUsed: new Date().toISOString() };
+      saveUserTagDB(newTag).catch(console.warn);
+      return [...prev, newTag];
+    });
   }, []);
 
   // ─── 待办 ─────────────────────────────────────────────────────────
@@ -1036,6 +1338,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const clearAllDataFn = useCallback(async () => {
     await clearAllDataDB();
     setTasks([]); setSessions([]); setTodos([]); setLongTasks([]); setAppBuckets([]);
+    setIdeas([]); setMilestones([]); setIdeaTasks([]); setUserTags([]);
   }, []);
 
   return (
@@ -1058,6 +1361,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       addCheckpoint, toggleCheckpoint, deleteCheckpoint,
       appBuckets, addBucket, updateBucket, deleteBucket,
       bucketDetection, confirmBucketDetection, dismissBucketDetection, recentAppNames,
+      // 点子生命周期
+      ideas, milestones, ideaTasks,
+      captureIdea, evaluateIdea, promoteIdea, archiveIdea, completeIdea,
+      updateIdea: updateIdeaFn, deleteIdeaFn,
+      addMilestone: addMilestoneFn, updateMilestone: updateMilestoneFn, deleteMilestoneFn: deleteMilestoneFnCb,
+      addIdeaTask: addIdeaTaskFn, updateIdeaTask: updateIdeaTaskFn, deleteIdeaTaskFn: deleteIdeaTaskFnCb, completeIdeaTask: completeIdeaTaskFn,
+      startIdeaTimer,
+      userTags, addUserTag: addUserTagFn,
       showNewTaskDialog, setShowNewTaskDialog,
       showEndTaskDialog, setShowEndTaskDialog,
       showManualSessionDialog, setShowManualSessionDialog,

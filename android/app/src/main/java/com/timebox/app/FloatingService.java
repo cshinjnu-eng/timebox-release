@@ -44,33 +44,6 @@ public class FloatingService extends Service {
     private static final int MAX_DEBUG_LOGS = 200;
     private static final int DIAGNOSTIC_LOG_INTERVAL = 30; // 每 30 tick (30秒) 输出一次诊断
 
-    // ── 桶监控 & Alert 委托 ────────────────────────────────────
-    private BucketMonitorManager bucketMonitor;
-    private BucketAlertHelper bucketAlert;
-
-    // ── 待确认桶检测（原生确认按钮 → JS 消费） ─────────────────
-    public static class PendingBucketConfirm {
-        public String bucketId;
-        public String bucketName;
-        public String category;
-        public String evalTag;
-        public String color;
-        public int detectedMinutes;
-        public long trueStart;
-        public long trueEnd;
-        public String mode; // "realtime" or "retrospective"
-
-        PendingBucketConfirm(String bucketId, String bucketName, String category,
-                             String evalTag, String color, int detectedMinutes,
-                             long trueStart, long trueEnd, String mode) {
-            this.bucketId = bucketId; this.bucketName = bucketName;
-            this.category = category; this.evalTag = evalTag;
-            this.color = color; this.detectedMinutes = detectedMinutes;
-            this.trueStart = trueStart; this.trueEnd = trueEnd; this.mode = mode;
-        }
-    }
-    static volatile PendingBucketConfirm pendingBucketConfirm = null;
-
     // ── 多任务数据模型 ────────────────────────────────────────
     public static class TaskInfo {
         public String name;
@@ -136,16 +109,10 @@ public class FloatingService extends Service {
             if (tasksNeedRebuild) {
                 tasksNeedRebuild = false;
                 if (activeTasks.isEmpty()) {
-                    if (bucketAlert == null || !bucketAlert.isShowing()) {
-                        logD("TICKER: no tasks, no alert, stopping service");
-                        isRunning = false;
-                        stopForeground(true);
-                        stopSelf();
-                        return;
-                    }
-                    // 有 alert banner，不停服务，只停 ticker
-                    logD("TICKER: no tasks but alert is showing, pausing ticker");
+                    logD("TICKER: no tasks, stopping service");
                     isRunning = false;
+                    stopForeground(true);
+                    stopSelf();
                     return;
                 }
                 rebuildTaskRows();
@@ -230,34 +197,6 @@ public class FloatingService extends Service {
                 + ", isHonorOrHuawei=" + isHonorOrHuawei());
         createNotificationChannel();
 
-        // 初始化桶监控 & Alert 委托
-        bucketMonitor = new BucketMonitorManager(this, (bucket, durMin, isRealtime, trueStart, trueEnd) -> {
-            if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-            bucketMonitor.setAlertShowing(true);
-            bucketAlert.show(windowManager, bucket.id, bucket.name, durMin, bucket.color,
-                    isRealtime, trueStart, trueEnd, new BucketAlertHelper.AlertCallback() {
-                        @Override
-                        public void onConfirm(String bucketId, String bucketName, String colorHex,
-                                              int minutes, boolean rt, long ts, long te) {
-                            bucketMonitor.setAlertShowing(false);
-                            String mode = rt ? "realtime" : "retrospective";
-                            pendingBucketConfirm = new PendingBucketConfirm(
-                                    bucketId, bucketName, "", "", colorHex, minutes, ts, te, mode);
-                            logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
-                            Intent openApp = new Intent(FloatingService.this, MainActivity.class);
-                            openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                            try { startActivity(openApp); } catch (Exception ignored) {}
-                            maybeStopIfIdle();
-                        }
-                        @Override
-                        public void onDismiss() {
-                            bucketMonitor.setAlertShowing(false);
-                            maybeStopIfIdle();
-                        }
-                    });
-        });
-        bucketAlert = new BucketAlertHelper(this);
-
         // 荣耀/华为设备获取 WakeLock 防止 CPU 休眠杀 timer
         if (isHonorOrHuawei()) {
             acquireWakeLock();
@@ -276,75 +215,9 @@ public class FloatingService extends Service {
                 tasksNeedRebuild = true;
                 isRunning = false;
                 handler.removeCallbacks(ticker);
-                if (bucketAlert != null) bucketAlert.remove();
                 releaseWakeLock();
                 stopForeground(true);
                 stopSelf();
-                return START_NOT_STICKY;
-            }
-
-            if ("START_MONITOR".equals(action)) {
-                logD("START_MONITOR: starting bucket background polling");
-                bucketMonitor.start();
-                if (!isRunning) {
-                    try {
-                        createNotificationChannel();
-                        startForeground(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
-                    } catch (Exception e) { logE("START_MONITOR: startForeground failed", e); }
-                }
-                return START_STICKY;
-            }
-
-            if ("STOP_MONITOR".equals(action)) {
-                logD("STOP_MONITOR: stopping bucket background polling");
-                bucketMonitor.stop();
-                if (!isRunning && activeTasks.isEmpty() && (bucketAlert == null || !bucketAlert.isShowing())) {
-                    stopForeground(true); stopSelf();
-                }
-                return START_NOT_STICKY;
-            }
-
-            if ("BUCKET_ALERT".equals(action)) {
-                String bId = intent.getStringExtra("bucketId");
-                String bName = intent.getStringExtra("bucketName");
-                int bMinutes = intent.getIntExtra("minutes", 0);
-                String bColor = intent.getStringExtra("color");
-                boolean bRealtime = intent.getBooleanExtra("isRealtime", true);
-                long bStart = intent.getLongExtra("trueStart", 0);
-                long bEnd = intent.getLongExtra("trueEnd", 0);
-                logD("BUCKET_ALERT: name=" + bName + ", min=" + bMinutes + ", realtime=" + bRealtime);
-                if (!isRunning && activeTasks.isEmpty()) {
-                    try {
-                        BucketAlertHelper.createAlertNotificationChannel(this);
-                        startForeground(BucketAlertHelper.NOTIF_ALERT_ID,
-                                BucketAlertHelper.buildAlertNotification(this, bName));
-                    } catch (Exception e) { logE("BUCKET_ALERT: startForeground failed", e); }
-                }
-                if (windowManager == null) windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-                bucketAlert.show(windowManager, bId != null ? bId : "", bName, bMinutes, bColor,
-                        bRealtime, bStart, bEnd, new BucketAlertHelper.AlertCallback() {
-                            @Override
-                            public void onConfirm(String bucketId, String bucketName, String colorHex,
-                                                  int minutes, boolean rt, long ts, long te) {
-                                String mode = rt ? "realtime" : "retrospective";
-                                pendingBucketConfirm = new PendingBucketConfirm(
-                                        bucketId, bucketName, "", "", colorHex, minutes, ts, te, mode);
-                                logD("BucketConfirm: pending set for bucket=" + bucketName + " mode=" + mode);
-                                Intent openApp = new Intent(FloatingService.this, MainActivity.class);
-                                openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                                try { startActivity(openApp); } catch (Exception ignored) {}
-                                maybeStopIfIdle();
-                            }
-                            @Override
-                            public void onDismiss() { maybeStopIfIdle(); }
-                        });
-                return START_NOT_STICKY;
-            }
-
-            if ("DISMISS_BUCKET_ALERT".equals(action)) {
-                logD("DISMISS_BUCKET_ALERT");
-                if (bucketAlert != null) bucketAlert.remove();
-                maybeStopIfIdle();
                 return START_NOT_STICKY;
             }
 
@@ -403,18 +276,7 @@ public class FloatingService extends Service {
                 handler.post(ticker);
             }
         } else {
-            logD("onStartCommand: intent is null (service restarted), flags=" + flags + " → reloading persisted buckets");
-            // 服务被系统杀死后以 START_STICKY 重启：从 SharedPreferences 恢复桶配置并重启监控
-            bucketMonitor.loadBucketsFromPrefs();
-            if (bucketMonitor.hasBuckets()) {
-                if (!isRunning) {
-                    try {
-                        createNotificationChannel();
-                        startForeground(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
-                    } catch (Exception e) { logE("restart: startForeground failed", e); }
-                }
-                bucketMonitor.start();
-            }
+            logD("onStartCommand: intent is null (service restarted), flags=" + flags);
         }
         return START_STICKY;
     }
@@ -466,31 +328,11 @@ public class FloatingService extends Service {
         logD("onDestroy: isRunning=" + isRunning);
         isRunning = false;
         handler.removeCallbacks(ticker);
-        if (bucketMonitor != null) bucketMonitor.stop();
-        if (bucketAlert != null) bucketAlert.remove();
         releaseWakeLock();
         if (floatingView != null && windowManager != null) {
             try { windowManager.removeView(floatingView); } catch (Exception ignored) {}
         }
         super.onDestroy();
-    }
-
-    /** alert 消失后如果没有计时任务且没有后台监控则停服务 */
-    private void maybeStopIfIdle() {
-        if (!isRunning && activeTasks.isEmpty()) {
-            if (bucketMonitor != null && bucketMonitor.isRunning()) {
-                // 后台监控仍在运行，不停服务，但切换通知为监控态
-                logD("maybeStopIfIdle: monitor still running, keeping service alive");
-                try {
-                    createNotificationChannel();
-                    NotificationManager nm = getSystemService(NotificationManager.class);
-                    if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification("TimeBox 监控中..."));
-                } catch (Exception ignored) {}
-                return;
-            }
-            try { stopForeground(true); } catch (Exception ignored) {}
-            stopSelf();
-        }
     }
 
     // ========== Overlay 管理 ==========
@@ -897,8 +739,4 @@ public class FloatingService extends Service {
         }
     }
 
-    /** 公共日志方法，供 BucketMonitorManager / BucketAlertHelper 调用 */
-    public static void addLog(String level, String msg) {
-        addDebugLog(level, msg);
-    }
 }

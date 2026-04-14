@@ -134,7 +134,7 @@ export function TodoPage() {
               待办事项
             </h1>
             <p style={{ fontSize: 13, color: "#8B8FA8", marginTop: 2 }}>
-              {completedCount}/{activeTodos.length} 已完成
+              <span className="tb-mono">{completedCount}/{activeTodos.length}</span> 已完成
             </p>
           </div>
           <button
@@ -153,13 +153,14 @@ export function TodoPage() {
         </div>
 
         {/* Progress bar */}
-        <div className="rounded-full mb-4" style={{ height: 4, background: "#252836" }}>
+        <div className="rounded-full mb-4 overflow-hidden" style={{ height: 4, background: "#1A1D29" }}>
           <div
             className="rounded-full"
             style={{
               height: "100%",
               width: `${activeTodos.length > 0 ? (completedCount / activeTodos.length) * 100 : 0}%`,
               background: "linear-gradient(90deg, #4F7FFF, #10B981)",
+              boxShadow: "0 0 8px rgba(79, 127, 255, 0.3)",
               transition: "width 0.3s ease",
             }}
           />
@@ -258,14 +259,19 @@ export function TodoPage() {
         {filteredTodos.length === 0 && (
           <div
             className="flex flex-col items-center justify-center py-16 rounded-xl"
-            style={{ border: "1.5px dashed #252836", color: "#8B8FA8", marginTop: 8 }}
+            style={{
+              border: "1px dashed #252836",
+              color: "#8B8FA8",
+              marginTop: 8,
+              background: "radial-gradient(ellipse at center, rgba(79, 127, 255, 0.03) 0%, transparent 70%)",
+            }}
           >
-            <CheckCircle2 size={36} style={{ marginBottom: 12, opacity: 0.4 }} />
+            <CheckCircle2 size={36} style={{ marginBottom: 12, opacity: 0.3, filter: "drop-shadow(0 0 8px rgba(79, 127, 255, 0.15))" }} />
             <p style={{ fontSize: 14 }}>暂无待办事项</p>
             <button
               onClick={() => setShowInput(true)}
               className="mt-4 px-4 py-2 rounded-lg text-sm"
-              style={{ background: "rgba(79,127,255,0.15)", color: "#4F7FFF" }}
+              style={{ background: "rgba(79, 127, 255, 0.10)", color: "#4F7FFF", border: "1px solid rgba(79, 127, 255, 0.15)" }}
             >
               + 添加待办
             </button>

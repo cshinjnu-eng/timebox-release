@@ -1,9 +1,10 @@
 /**
  * IndexedDB 持久化层 — 基于 ActivityWatch 的 Bucket/Event 数据模型
+ * v3: 新增 userTags store
  */
 
 const DB_NAME = "TimeBoxDB";
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 // ─── 数据模型 ─────────────────────────────────────────────────────────
 
@@ -30,15 +31,48 @@ function openDB(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => reject(req.error);
     req.onsuccess = () => resolve(req.result);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains("buckets")) {
-        db.createObjectStore("buckets", { keyPath: "id" });
+      const oldVersion = event.oldVersion;
+
+      // ─── v1 stores ───
+      if (oldVersion < 1) {
+        if (!db.objectStoreNames.contains("buckets")) {
+          db.createObjectStore("buckets", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("events")) {
+          const store = db.createObjectStore("events", { keyPath: "id" });
+          store.createIndex("bucketId", "bucketId", { unique: false });
+          store.createIndex("timestamp", "timestamp", { unique: false });
+        }
       }
-      if (!db.objectStoreNames.contains("events")) {
-        const store = db.createObjectStore("events", { keyPath: "id" });
-        store.createIndex("bucketId", "bucketId", { unique: false });
-        store.createIndex("timestamp", "timestamp", { unique: false });
+
+      // ─── v2 stores: ideas / milestones / ideaTasks ───
+      if (oldVersion < 2) {
+        if (!db.objectStoreNames.contains("ideas")) {
+          const ideasStore = db.createObjectStore("ideas", { keyPath: "id" });
+          ideasStore.createIndex("stage", "stage", { unique: false });
+          ideasStore.createIndex("category", "category", { unique: false });
+          ideasStore.createIndex("createdAt", "createdAt", { unique: false });
+        }
+        if (!db.objectStoreNames.contains("milestones")) {
+          const msStore = db.createObjectStore("milestones", { keyPath: "id" });
+          msStore.createIndex("ideaId", "ideaId", { unique: false });
+          msStore.createIndex("status", "status", { unique: false });
+        }
+        if (!db.objectStoreNames.contains("ideaTasks")) {
+          const taskStore = db.createObjectStore("ideaTasks", { keyPath: "id" });
+          taskStore.createIndex("ideaId", "ideaId", { unique: false });
+          taskStore.createIndex("milestoneId", "milestoneId", { unique: false });
+          taskStore.createIndex("status", "status", { unique: false });
+        }
+      }
+
+      // ─── v3 stores: userTags ───
+      if (oldVersion < 3) {
+        if (!db.objectStoreNames.contains("userTags")) {
+          db.createObjectStore("userTags", { keyPath: "name" });
+        }
       }
     };
   });
@@ -119,12 +153,84 @@ export async function getAllEvents(): Promise<EventRecord[]> {
   return getAll("events");
 }
 
+// ─── Ideas CRUD ──────────────────────────────────────────────────────
+
+export async function saveIdea(idea: Record<string, any>): Promise<void> {
+  return put("ideas", idea);
+}
+
+export async function deleteIdea(id: string): Promise<void> {
+  return remove("ideas", id);
+}
+
+export async function getAllIdeas(): Promise<Record<string, any>[]> {
+  return getAll("ideas");
+}
+
+// ─── Milestones CRUD ─────────────────────────────────────────────────
+
+export async function saveMilestone(ms: Record<string, any>): Promise<void> {
+  return put("milestones", ms);
+}
+
+export async function deleteMilestone(id: string): Promise<void> {
+  return remove("milestones", id);
+}
+
+export async function getAllMilestones(): Promise<Record<string, any>[]> {
+  return getAll("milestones");
+}
+
+export async function getMilestonesByIdea(ideaId: string): Promise<Record<string, any>[]> {
+  return getAllByIndex("milestones", "ideaId", ideaId);
+}
+
+// ─── IdeaTasks CRUD ──────────────────────────────────────────────────
+
+export async function saveIdeaTask(task: Record<string, any>): Promise<void> {
+  return put("ideaTasks", task);
+}
+
+export async function deleteIdeaTask(id: string): Promise<void> {
+  return remove("ideaTasks", id);
+}
+
+export async function getAllIdeaTasks(): Promise<Record<string, any>[]> {
+  return getAll("ideaTasks");
+}
+
+export async function getIdeaTasksByIdea(ideaId: string): Promise<Record<string, any>[]> {
+  return getAllByIndex("ideaTasks", "ideaId", ideaId);
+}
+
+export async function getIdeaTasksByMilestone(milestoneId: string): Promise<Record<string, any>[]> {
+  return getAllByIndex("ideaTasks", "milestoneId", milestoneId);
+}
+
+// ─── UserTags CRUD ──────────────────────────────────────────────────
+
+export async function saveUserTag(tag: Record<string, any>): Promise<void> {
+  return put("userTags", tag);
+}
+
+export async function deleteUserTag(name: string): Promise<void> {
+  return remove("userTags", name);
+}
+
+export async function getAllUserTags(): Promise<Record<string, any>[]> {
+  return getAll("userTags");
+}
+
+// ─── 清空所有数据 ─────────────────────────────────────────────────────
+
 export async function clearAllData(): Promise<void> {
   const db = await openDB();
+  const storeNames = ["events", "buckets", "ideas", "milestones", "ideaTasks", "userTags"];
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(["events", "buckets"], "readwrite");
-    tx.objectStore("events").clear();
-    tx.objectStore("buckets").clear();
+    const tx = db.transaction(storeNames, "readwrite");
+    for (const name of storeNames) {
+      tx.objectStore(name).clear();
+    }
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => { db.close(); reject(tx.error); };
   });
@@ -135,7 +241,7 @@ export async function clearAllData(): Promise<void> {
 export async function ensureDefaultBuckets(): Promise<void> {
   const buckets = await getAllBuckets();
   const now = new Date().toISOString();
-  
+
   const defaults: Bucket[] = [
     { id: "timebox-tasks", name: "计时任务", type: "tasks", client: "timebox-web", created: now },
     { id: "timebox-todos", name: "待办事项", type: "todos", client: "timebox-web", created: now },

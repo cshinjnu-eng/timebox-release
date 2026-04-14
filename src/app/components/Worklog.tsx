@@ -59,17 +59,27 @@ function StatCard({
   return (
     <div
       className="rounded-xl p-4 flex items-start gap-3 flex-shrink-0"
-      style={{ background: "#161820", border: "1px solid #252836", minWidth: 140 }}
+      style={{
+        background: "#161820",
+        border: "1px solid #252836",
+        minWidth: 140,
+        boxShadow: `0 0 16px ${color}08, inset 0 1px 0 rgba(255, 255, 255, 0.02)`,
+      }}
     >
       <div
         className="flex items-center justify-center rounded-lg flex-shrink-0"
-        style={{ width: 36, height: 36, background: `${color}1A` }}
+        style={{
+          width: 36,
+          height: 36,
+          background: `${color}1A`,
+          boxShadow: `0 0 8px ${color}15`,
+        }}
       >
         <Icon size={18} style={{ color }} />
       </div>
       <div>
         <p style={{ fontSize: 12, color: "#8B8FA8" }}>{label}</p>
-        <p style={{ fontSize: 22, fontWeight: 700, color: "#E8EAF0", fontFamily: "monospace" }}>{value}</p>
+        <p className="tb-timer" style={{ fontSize: 22, fontWeight: 700, color: "#E8EAF0" }}>{value}</p>
         {sub && <p style={{ fontSize: 12, color: "#8B8FA8", marginTop: 2 }}>{sub}</p>}
       </div>
     </div>
@@ -674,9 +684,13 @@ export function Worklog() {
             {grouped.length === 0 ? (
               <div
                 className="flex flex-col items-center justify-center py-12 rounded-xl"
-                style={{ border: "1.5px dashed #252836", color: "#8B8FA8" }}
+                style={{
+                  border: "1px dashed #252836",
+                  color: "#8B8FA8",
+                  background: "radial-gradient(ellipse at center, rgba(79, 127, 255, 0.03) 0%, transparent 70%)",
+                }}
               >
-                <FileText size={30} style={{ marginBottom: 10, opacity: 0.4 }} />
+                <FileText size={30} style={{ marginBottom: 10, opacity: 0.3, filter: "drop-shadow(0 0 8px rgba(79, 127, 255, 0.15))" }} />
                 <p style={{ fontSize: 14 }}>暂无工作记录</p>
               </div>
             ) : (
@@ -760,9 +774,9 @@ export function Worklog() {
                                 style={{
                                   fontSize: 14,
                                   fontWeight: 700,
-                                  fontFamily: "monospace",
                                   color: cat.color,
                                 }}
+                                className="tb-mono"
                               >
                                 {formatDuration(session.duration)}
                               </p>
@@ -914,9 +928,9 @@ export function Worklog() {
                           {pct}%
                         </span>
                         <span
+                          className="tb-mono"
                           style={{
                             fontSize: 12,
-                            fontFamily: "monospace",
                             color: cat.color,
                             minWidth: 40,
                             textAlign: "right",
