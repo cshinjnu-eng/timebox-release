@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import {
-  User, Sparkles, Brain, Target, ChevronDown, ChevronUp, Check, Pencil, X
+  User, Sparkles, Brain, Target, ChevronDown, ChevronUp, Check, Pencil, X, Zap, Loader2
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import {
@@ -315,7 +315,7 @@ function MBTISelector({ value, onChange }: { value: string; onChange: (v: string
 // ─── Main ProfilePage ──────────────────────────────────────────────────
 
 export function ProfilePage() {
-  const { sessions, ideas, longTasks, todos, userProfile, updateUserProfile } = useApp();
+  const { sessions, ideas, longTasks, todos, userProfile, updateUserProfile, growthInsight, aiLoading } = useApp();
   const [showBigFive, setShowBigFive] = useState(false);
   const [bigFiveDraft, setBigFiveDraft] = useState(
     userProfile?.bigFive || { openness: 50, conscientiousness: 50, extraversion: 50, agreeableness: 50, neuroticism: 50 }
@@ -404,6 +404,25 @@ export function ProfilePage() {
           <div style={{ fontSize: 10, color: "#525675" }}>综合指数</div>
         </div>
       </div>
+
+      {/* ── AI 成长洞察按钮 ── */}
+      <button
+        onClick={() => growthInsight().catch(() => {})}
+        disabled={aiLoading}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-3 mb-4 font-semibold transition-all"
+        style={{
+          background: aiLoading
+            ? "#161820"
+            : "linear-gradient(135deg, #4F7FFF22, #A855F722)",
+          border: "1px solid #4F7FFF44",
+          color: aiLoading ? "#525675" : "#A855F7",
+          fontSize: 14,
+        }}
+      >
+        {aiLoading
+          ? <><Loader2 size={16} className="animate-spin" />生成中...</>
+          : <><Zap size={16} />AI 成长洞察</>}
+      </button>
 
       {/* ── Radar Chart ── */}
       <div className="rounded-2xl p-4 mb-4"

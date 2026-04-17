@@ -56,6 +56,7 @@ import {
   buildNLCommandMessages,
   buildIdeaAssistMessages,
   buildAutoInsightMessages,
+  buildGrowthInsightMessages,
 } from "../services/ai-prompts";
 
 const FloatingWindow = registerPlugin<any>("FloatingWindow");
@@ -408,6 +409,7 @@ interface AppContextType {
   generateDailyReport: (targetDate?: Date) => Promise<void>;
   generateWeeklyReport: () => Promise<void>;
   analyzeTime: () => Promise<void>;
+  growthInsight: () => Promise<void>;
   executeNLCommand: (input: string) => Promise<string>;
   dismissInsight: (id: string) => void;
   showAISettings: boolean;
@@ -663,6 +665,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   aiConfigRef.current = aiConfig;
   const aiInsightsRef = useRef<AIInsight[]>([]);
   aiInsightsRef.current = aiInsights;
+  const userProfileRef = useRef<UserProfile | null>(null);
+  userProfileRef.current = userProfile;
 
   // ─── 前台切换时重触发桶检测 ──────────────────────────────────────
   useEffect(() => {
@@ -1486,8 +1490,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       tasks: tasksRef.current,
       sessions: sessionsRef.current,
       ideas: ideasRef.current,
-      todos: [] as any[], // TodoItem doesn't have all fields; pass what we have
+      todos: [] as any[],
       longTasks: longTasksRef.current,
+      userProfile: userProfileRef.current || undefined,
     }, targetDate);
   }, []);
 
@@ -1553,6 +1558,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const messages = buildTimeAnalysisMessages(snapshot);
       const res = await callAI(cfg, messages, { maxTokens: 800 });
       await addInsight("time_analysis", res.content);
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig, getDataSnapshot, addInsight]);
+
+  const growthInsightFn = useCallback(async () => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先配置 AI API Key");
+    setAILoading(true);
+    try {
+      const snapshot = getDataSnapshot();
+      const messages = buildGrowthInsightMessages(snapshot);
+      const res = await callAI(cfg, messages, { maxTokens: 1000 });
+      await addInsight("time_analysis", res.content); // reuse type slot
     } finally {
       setAILoading(false);
     }
@@ -1679,6 +1698,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return "时间分析已生成，查看洞察卡片";
       }
 
+      if (action === "GROWTH_INSIGHT") {
+        await growthInsightFn();
+        return "成长洞察已生成，查看洞察卡片";
+      }
+
       if (action === "CHAT" && data?.reply) {
         return data.reply;
       }
@@ -1737,7 +1761,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       // AI
       aiConfig, aiInsights, updateAIConfig: updateAIConfigFn, testAIConnection: testAIConnectionFn,
       askAI: askAIFn, generateDailyReport: generateDailyReportFn, generateWeeklyReport: generateWeeklyReportFn,
-      analyzeTime: analyzeTimeFn, executeNLCommand: executeNLCommandFn, dismissInsight: dismissInsightFn,
+      analyzeTime: analyzeTimeFn, growthInsight: growthInsightFn,
+      executeNLCommand: executeNLCommandFn, dismissInsight: dismissInsightFn,
       showAISettings, setShowAISettings, aiLoading, cancelAI: cancelAIFn,
       conversationHistory, clearConversation: () => setConversationHistory([]),
       // 用户档案

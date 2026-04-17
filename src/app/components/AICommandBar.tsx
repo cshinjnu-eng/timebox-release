@@ -26,7 +26,7 @@ interface ChatMessage {
 
 export function AICommandBar() {
   const {
-    executeNLCommand, generateDailyReport, generateWeeklyReport, analyzeTime,
+    executeNLCommand, generateDailyReport, generateWeeklyReport, analyzeTime, growthInsight,
     aiConfig, aiLoading, setShowAISettings, cancelAI,
     conversationHistory, clearConversation,
   } = useApp();
@@ -101,12 +101,15 @@ export function AICommandBar() {
     }
   }
 
-  async function handleQuickAction(action: "weekly" | "analyze") {
+  async function handleQuickAction(action: "weekly" | "analyze" | "growth") {
     setError(null);
     try {
       if (action === "weekly") {
         await generateWeeklyReport();
         setChatMessages((prev) => [...prev, { role: "assistant", content: "周报已生成，查看洞察卡片", isAction: true }]);
+      } else if (action === "growth") {
+        await growthInsight();
+        setChatMessages((prev) => [...prev, { role: "assistant", content: "成长洞察已生成，查看洞察卡片", isAction: true }]);
       } else {
         await analyzeTime();
         setChatMessages((prev) => [...prev, { role: "assistant", content: "时间分析已生成，查看洞察卡片", isAction: true }]);
@@ -352,6 +355,19 @@ export function AICommandBar() {
                 >
                   <BarChart3 size={10} />
                   分析
+                </button>
+                <button
+                  onClick={() => handleQuickAction("growth")}
+                  disabled={aiLoading}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs"
+                  style={{
+                    background: "rgba(168,85,247,0.06)",
+                    border: "1px solid rgba(168,85,247,0.15)",
+                    color: "#A855F7",
+                  }}
+                >
+                  <Zap size={10} />
+                  成长
                 </button>
                 {hasHistory && (
                   <button

@@ -185,6 +185,7 @@ export interface DataSnapshot {
   date: string;
   targetDaySessions: string;  // 指定日期的 sessions（可与 todaySessions 不同）
   targetDate: string;          // 目标日期的可读文本
+  profile: string;             // 用户档案摘要（MBTI + 大五 + 属性得分）
 }
 
 /**
@@ -204,6 +205,19 @@ export function collectSnapshot(data: {
   }>;
   todos: Array<{ text: string; completed: boolean; category: string; priority: string; archived?: boolean }>;
   longTasks: Array<{ name: string; category: string; elapsed: number; isRunning: boolean }>;
+  userProfile?: {
+    name?: string;
+    mbti?: string;
+    occupation?: string;
+    bigFive?: {
+      openness: number; conscientiousness: number; extraversion: number;
+      agreeableness: number; neuroticism: number;
+    };
+    attributes?: {
+      execution: number; creativity: number; focus: number;
+      selfControl: number; curiosity: number; resilience: number;
+    };
+  };
 }, targetDate?: Date): DataSnapshot {
   const now = new Date();
   const target = targetDate || now;
@@ -269,6 +283,26 @@ export function collectSnapshot(data: {
 
   const targetDateStr = target.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
 
+  // ─── 用户档案摘要 ───────────────────────────────────────────────────
+  let profileParts: string[] = [];
+  if (data.userProfile) {
+    const p = data.userProfile;
+    if (p.name) profileParts.push(`姓名: ${p.name}`);
+    if (p.occupation) profileParts.push(`职业: ${p.occupation}`);
+    if (p.mbti) profileParts.push(`MBTI: ${p.mbti}`);
+    if (p.bigFive) {
+      const bf = p.bigFive;
+      profileParts.push(`大五人格 — 开放性${bf.openness} 尽责性${bf.conscientiousness} 外向性${bf.extraversion} 宜人性${bf.agreeableness} 神经质${bf.neuroticism}`);
+    }
+    if (p.attributes) {
+      const a = p.attributes;
+      profileParts.push(`当前属性 — 执行力${a.execution} 创造力${a.creativity} 专注力${a.focus} 自控力${a.selfControl} 求知欲${a.curiosity} 抗压性${a.resilience}`);
+    }
+  }
+  const profileStr = profileParts.length > 0
+    ? `用户档案:\n${profileParts.join("\n")}`
+    : "";
+
   return {
     todaySessions: todaySessions.length > 0
       ? `今日完成: ${todaySessions.join("; ")}`
@@ -293,5 +327,6 @@ export function collectSnapshot(data: {
       ? `${targetDateStr}完成: ${targetSessions.join("; ")}`
       : `${targetDateStr}暂无计时记录`,
     targetDate: targetDateStr,
+    profile: profileStr,
   };
 }
