@@ -1541,6 +1541,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       const { action, data } = parsed;
 
+      if (action === "CREATE_SESSION" && data) {
+        const startTime = new Date(data.startTime);
+        const endTime = new Date(data.endTime);
+        if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
+          return "时间格式解析失败，请描述得更具体一些（如「昨晚9点到11点」）";
+        }
+        if (endTime <= startTime) {
+          return "结束时间必须晚于开始时间";
+        }
+        addManualSession({
+          name: data.name || "AI 补录记录",
+          category: CATEGORIES.find((c) => c.name === data.category)?.name || CATEGORIES[0].name,
+          evalTag: data.evalTag || undefined,
+          startTime,
+          endTime,
+          feeling: data.feeling || undefined,
+          tags: data.tags || [],
+        });
+        const mins = Math.round((endTime.getTime() - startTime.getTime()) / 60000);
+        const label = mins >= 60 ? `${Math.floor(mins / 60)}小时${mins % 60 > 0 ? mins % 60 + "分钟" : ""}` : `${mins}分钟`;
+        return `已补录「${data.name}」${label}记录`;
+      }
+
       if (action === "CREATE_TASK" && data) {
         const cat = CATEGORIES.find((c) => c.name === data.category) || CATEGORIES[0];
         addTask({

@@ -140,34 +140,41 @@ export function buildNLCommandMessages(snapshot: DataSnapshot, userInput: string
 
 可用操作（严格输出 JSON，不要包裹在markdown代码块中）：
 
-1. 创建计时任务:
+1. 补录历史时间记录（最重要）:
+{ "action": "CREATE_SESSION", "data": { "name": "事项名称", "category": "工作|学习|生活|娱乐|琐事", "startTime": "ISO8601时间字符串", "endTime": "ISO8601时间字符串", "evalTag": "专注|高效|一般|分心|摸鱼（可选）", "feeling": "感受文字（可选）", "tags": ["标签"] } }
+   - startTime/endTime 必须是完整 ISO 格式，如 "2026-04-17T21:00:00"
+   - 根据用户描述的相对时间（昨晚、上午、前天下午等）结合当前时间推算绝对时间
+   - 用户说「昨晚9点到11点」→ 计算昨天的 21:00 和 23:00
+
+2. 创建计时任务（从现在开始计时）:
 { "action": "CREATE_TASK", "data": { "name": "任务名", "category": "工作|学习|生活|娱乐|琐事", "tags": ["标签"], "estimatedMinutes": 分钟数 } }
 
-2. 创建点子:
+3. 创建点子:
 { "action": "CREATE_IDEA", "data": { "title": "点子标题", "description": "描述", "category": "科研|产品|品牌|课业|生活" } }
 
-3. 创建待办:
+4. 创建待办:
 { "action": "CREATE_TODO", "data": { "text": "待办内容", "category": "工作|学习|生活|娱乐|琐事", "priority": "high|medium|low" } }
 
-4. 生成报告:
+5. 生成报告:
 { "action": "GENERATE_REPORT", "data": { "type": "daily" | "weekly", "daysAgo": 0 } }
-   daysAgo: 0=今天, 1=昨天, 2=前天, 以此类推。用户说「昨天的日报」→ daysAgo:1
+   daysAgo: 0=今天, 1=昨天, 2=前天, 以此类推
 
-5. 分析时间:
+6. 分析时间:
 { "action": "ANALYZE_TIME", "data": {} }
 
-6. 普通对话（不需要操作时）:
+7. 普通对话:
 { "action": "CHAT", "data": { "reply": "你的回复" } }
 
 注意：
-- 根据用户意图选择最合适的操作
+- 用户描述过去发生的事（昨天、上午、刚才做了X）→ 优先选 CREATE_SESSION 补录
+- 用户要开始做某事（帮我计时、开始XXX）→ 选 CREATE_TASK
 - category 必须从给定选项中选择
-- 如果不确定，用 CHAT 回复并询问
+- 时间推算要精确，不要忽视 AM/PM 和昨天/今天的区别
 - 用中文回复`,
     },
     {
       role: "user",
-      content: `当前状态：
+      content: `当前时间：${snapshot.date}
 ${snapshot.activeTasks}
 ${snapshot.todaySessions}
 
