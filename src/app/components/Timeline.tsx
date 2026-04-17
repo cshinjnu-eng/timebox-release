@@ -179,7 +179,7 @@ function formatMs(ms: number): string {
 }
 
 export function Timeline() {
-  const { sessions } = useApp();
+  const { sessions, appBuckets } = useApp();
   const [dayOffset, setDayOffset] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("全部");
   const [usageSessions, setUsageSessions] = useState<UsageSession[]>([]);
@@ -229,13 +229,14 @@ export function Timeline() {
     });
   }, [sessions, targetDate, selectedCategory]);
 
-  // 普通记录 vs 桶补录
+  // 普通记录 vs 桶补录（按 tag 或名称匹配识别桶 session，兼容旧数据）
+  const bucketNames = useMemo(() => new Set(appBuckets.map(b => b.name)), [appBuckets]);
   const normalSessions = useMemo(() =>
-    filteredSessions.filter((s) => !s.tags?.includes("_bucket")),
-    [filteredSessions]);
+    filteredSessions.filter((s) => !s.tags?.includes("_bucket") && !bucketNames.has(s.taskName)),
+    [filteredSessions, bucketNames]);
   const bucketSessions = useMemo(() =>
-    filteredSessions.filter((s) => s.tags?.includes("_bucket")),
-    [filteredSessions]);
+    filteredSessions.filter((s) => s.tags?.includes("_bucket") || bucketNames.has(s.taskName)),
+    [filteredSessions, bucketNames]);
 
   const MIN_BLOCK_H = 28; // 渲染最小高度
 

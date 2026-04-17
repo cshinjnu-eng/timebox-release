@@ -7,6 +7,7 @@ import { TodoPage } from "./components/TodoPage";
 import { AppBucketsPage } from "./components/AppBucketsPage";
 import { IdeaHub } from "./components/ideas/IdeaHub";
 import { IdeaDetail } from "./components/ideas/IdeaDetail";
+import { ProfilePage } from "./components/ProfilePage";
 
 export const router = createBrowserRouter([
   {
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: "worklog", Component: Worklog },
       { path: "timeline", Component: Timeline },
       { path: "buckets", Component: AppBucketsPage },
+      { path: "profile", Component: ProfilePage },
     ],
   },
 ]);

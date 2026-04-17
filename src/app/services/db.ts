@@ -2,10 +2,11 @@
  * IndexedDB 持久化层 — 基于 ActivityWatch 的 Bucket/Event 数据模型
  * v3: 新增 userTags store
  * v4: 新增 aiConfig + aiInsights store
+ * v5: 新增 userProfile store（属性系统）
  */
 
 const DB_NAME = "TimeBoxDB";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 // ─── 数据模型 ─────────────────────────────────────────────────────────
 
@@ -85,6 +86,13 @@ function openDB(): Promise<IDBDatabase> {
           const insightsStore = db.createObjectStore("aiInsights", { keyPath: "id" });
           insightsStore.createIndex("createdAt", "createdAt", { unique: false });
           insightsStore.createIndex("type", "type", { unique: false });
+        }
+      }
+
+      // ─── v5 stores: userProfile（属性系统）───
+      if (oldVersion < 5) {
+        if (!db.objectStoreNames.contains("userProfile")) {
+          db.createObjectStore("userProfile", { keyPath: "id" });
         }
       }
     };
@@ -262,6 +270,22 @@ export async function deleteAIInsight(id: string): Promise<void> {
 
 export async function getAllAIInsights(): Promise<Record<string, any>[]> {
   return getAll("aiInsights");
+}
+
+// ─── UserProfile CRUD ───────────────────────────────────────────────
+
+export async function saveUserProfile(profile: Record<string, any>): Promise<void> {
+  return put("userProfile", profile);
+}
+
+export async function getUserProfile(): Promise<Record<string, any> | null> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("userProfile", "readonly");
+    const req = tx.objectStore("userProfile").get("default");
+    req.onsuccess = () => { db.close(); resolve(req.result || null); };
+    req.onerror = () => { db.close(); reject(req.error); };
+  });
 }
 
 // ─── 清空所有数据 ─────────────────────────────────────────────────────

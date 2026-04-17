@@ -28,8 +28,15 @@ import {
   saveAIInsight as saveAIInsightDB,
   deleteAIInsight as deleteAIInsightDB,
   getAllAIInsights,
+  saveUserProfile as saveUserProfileDB,
+  getUserProfile as getUserProfileDB,
   type EventRecord,
 } from "../services/db";
+import {
+  computeRawScores,
+  updateEMA,
+  DEFAULT_ATTRIBUTES,
+} from "../services/attributes";
 import { downloadCSV } from "../services/exportCSV";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import {
@@ -245,6 +252,35 @@ export interface UserTag {
   lastUsed: string;
 }
 
+// ─── 用户档案（属性系统）─────────────────────────────────────────────
+
+export interface BigFiveScores {
+  openness: number;           // 开放性 0-100
+  conscientiousness: number;  // 尽责性 0-100
+  extraversion: number;       // 外向性 0-100
+  agreeableness: number;      // 宜人性 0-100
+  neuroticism: number;        // 神经质 0-100
+}
+
+export interface UserProfile {
+  id: "default";
+  name?: string;
+  birthday?: string;
+  occupation?: string;
+  mbti?: string;              // e.g. "INTP"
+  bigFive?: BigFiveScores;
+  // 动态属性 EMA 值（每日更新）
+  attributes?: {
+    execution: number;
+    creativity: number;
+    focus: number;
+    selfControl: number;
+    curiosity: number;
+    resilience: number;
+  };
+  attributeUpdatedDate?: string; // "YYYY-MM-DD"
+}
+
 // ─── AI 配置与洞察 ───────────────────────────────────────────────────
 
 export interface AIConfigRecord {
@@ -380,6 +416,9 @@ interface AppContextType {
   cancelAI: () => void;
   conversationHistory: AIMessage[];
   clearConversation: () => void;
+  // ─── 用户档案 ────────────────────────────────────────
+  userProfile: UserProfile | null;
+  updateUserProfile: (updates: Partial<Omit<UserProfile, "id">>) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -588,6 +627,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ideaTasks, setIdeaTasks] = useState<IdeaTask[]>([]);
   const [userTags, setUserTags] = useState<UserTag[]>([]);
 
+  // ─── 用户档案 state ───────────────────────────────────────────────
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+
   // ─── AI state ─────────────────────────────────────────────────────
   const [aiConfig, setAIConfig] = useState<AIConfigRecord | null>(null);
   const [aiInsights, setAIInsights] = useState<AIInsight[]>([]);
@@ -608,6 +650,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   bucketsRef.current = appBuckets;
   const bucketDetectionRef = useRef<BucketDetection | null>(null);
   bucketDetectionRef.current = bucketDetection;
+  const bucketScanningRef = useRef(false); // 防止并发扫描
   const ideasRef = useRef<Idea[]>([]);
   ideasRef.current = ideas;
   const milestonesRef = useRef<Milestone[]>([]);
@@ -663,12 +706,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (tagRecords.length > 0) setUserTags(tagRecords as UserTag[]);
 
         // ─── 加载 AI 配置和洞察 ──────────────────────────────
-        const [aiCfg, insightRecords] = await Promise.all([
+        const [aiCfg, insightRecords, profileRecord] = await Promise.all([
           getAIConfigDB(),
           getAllAIInsights(),
+          getUserProfileDB(),
         ]);
         if (aiCfg) setAIConfig(aiCfg as AIConfigRecord);
         if (insightRecords.length > 0) setAIInsights(insightRecords as AIInsight[]);
+        if (profileRecord) setUserProfile(profileRecord as UserProfile);
       } catch (err) {
         console.warn("IndexedDB 加载失败", err);
       } finally {
@@ -794,7 +839,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!dbReady || Capacitor.getPlatform() !== "android" || !FloatingWindow) return;
     if (appBuckets.length === 0) return;
     if (bucketDetectionRef.current) return;
+    if (bucketScanningRef.current) return; // 已有扫描进行中
 
+    bucketScanningRef.current = true;
     (async () => {
       try {
         const now = Date.now();
@@ -826,10 +873,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           }
           segments.push({ start: sStart, end: sEnd });
 
-          // 过滤掉已确认/忽略的片段
+          // 过滤掉已确认/忽略的片段，以及已有对应 WorkSession 的片段
           const pending = segments.filter(s => {
             const key = `bucket_seg_${bucket.id}_${Math.round(s.start / 1000)}`;
-            return !localStorage.getItem(key);
+            if (localStorage.getItem(key)) return false;
+            // 如果已有同名 session 覆盖该时间段（误差 toleranceSeconds 内），跳过
+            const alreadyCovered = sessionsRef.current.some(ws =>
+              ws.taskName === bucket.name &&
+              Math.abs(ws.startTime.getTime() - s.start) < bucket.toleranceSeconds * 1000
+            );
+            return !alreadyCovered;
           });
           if (pending.length === 0) continue;
 
@@ -855,6 +908,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           break; // 一次只提示一个桶
         }
       } catch (_) { /* usage permission not granted */ }
+      finally { bucketScanningRef.current = false; }
     })();
   // appBuckets 变化（首次加载）或从后台切回前台时重新触发
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1437,6 +1491,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }, targetDate);
   }, []);
 
+  const updateUserProfileFn = useCallback(async (updates: Partial<Omit<UserProfile, "id">>) => {
+    setUserProfile(prev => {
+      const base = prev || { id: "default" as const };
+      const merged: UserProfile = { ...base, ...updates, id: "default" as const };
+      saveUserProfileDB(merged).catch(console.warn);
+      return merged;
+    });
+  }, []);
+
   const updateAIConfigFn = useCallback(async (updates: Partial<AIConfigRecord>) => {
     const current = aiConfigRef.current || {
       id: "default" as const,
@@ -1677,6 +1740,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       analyzeTime: analyzeTimeFn, executeNLCommand: executeNLCommandFn, dismissInsight: dismissInsightFn,
       showAISettings, setShowAISettings, aiLoading, cancelAI: cancelAIFn,
       conversationHistory, clearConversation: () => setConversationHistory([]),
+      // 用户档案
+      userProfile, updateUserProfile: updateUserProfileFn,
     }}>
       {children}
     </AppContext.Provider>

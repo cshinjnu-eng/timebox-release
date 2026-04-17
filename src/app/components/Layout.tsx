@@ -10,6 +10,7 @@ import {
   BookOpen,
   Boxes,
   Lightbulb,
+  UserCircle,
 } from "lucide-react";
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
@@ -26,7 +27,7 @@ const navItems = [
   { to: "/todo", label: "待办", icon: ClipboardList },
   { to: "/worklog", label: "数据", icon: FileText },
   { to: "/timeline", label: "时间轴", icon: GitBranch },
-  { to: "/buckets", label: "应用桶", icon: Boxes },
+  { to: "/profile", label: "档案", icon: UserCircle },
 ];
 
 function getNow() {
