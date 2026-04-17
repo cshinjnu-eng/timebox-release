@@ -1,10 +1,11 @@
 /**
  * IndexedDB 持久化层 — 基于 ActivityWatch 的 Bucket/Event 数据模型
  * v3: 新增 userTags store
+ * v4: 新增 aiConfig + aiInsights store
  */
 
 const DB_NAME = "TimeBoxDB";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 // ─── 数据模型 ─────────────────────────────────────────────────────────
 
@@ -72,6 +73,18 @@ function openDB(): Promise<IDBDatabase> {
       if (oldVersion < 3) {
         if (!db.objectStoreNames.contains("userTags")) {
           db.createObjectStore("userTags", { keyPath: "name" });
+        }
+      }
+
+      // ─── v4 stores: aiConfig + aiInsights ───
+      if (oldVersion < 4) {
+        if (!db.objectStoreNames.contains("aiConfig")) {
+          db.createObjectStore("aiConfig", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("aiInsights")) {
+          const insightsStore = db.createObjectStore("aiInsights", { keyPath: "id" });
+          insightsStore.createIndex("createdAt", "createdAt", { unique: false });
+          insightsStore.createIndex("type", "type", { unique: false });
         }
       }
     };
@@ -221,11 +234,41 @@ export async function getAllUserTags(): Promise<Record<string, any>[]> {
   return getAll("userTags");
 }
 
+// ─── AIConfig CRUD ──────────────────────────────────────────────────
+
+export async function saveAIConfig(config: Record<string, any>): Promise<void> {
+  return put("aiConfig", config);
+}
+
+export async function getAIConfig(): Promise<Record<string, any> | null> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("aiConfig", "readonly");
+    const req = tx.objectStore("aiConfig").get("default");
+    req.onsuccess = () => { db.close(); resolve(req.result || null); };
+    req.onerror = () => { db.close(); reject(req.error); };
+  });
+}
+
+// ─── AIInsights CRUD ────────────────────────────────────────────────
+
+export async function saveAIInsight(insight: Record<string, any>): Promise<void> {
+  return put("aiInsights", insight);
+}
+
+export async function deleteAIInsight(id: string): Promise<void> {
+  return remove("aiInsights", id);
+}
+
+export async function getAllAIInsights(): Promise<Record<string, any>[]> {
+  return getAll("aiInsights");
+}
+
 // ─── 清空所有数据 ─────────────────────────────────────────────────────
 
 export async function clearAllData(): Promise<void> {
   const db = await openDB();
-  const storeNames = ["events", "buckets", "ideas", "milestones", "ideaTasks", "userTags"];
+  const storeNames = ["events", "buckets", "ideas", "milestones", "ideaTasks", "userTags", "aiInsights"];
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeNames, "readwrite");
     for (const name of storeNames) {

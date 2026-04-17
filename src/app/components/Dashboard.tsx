@@ -33,6 +33,8 @@ import {
   SleepSuggestion,
   LongTask,
 } from "../context/AppContext";
+import { AICommandBar } from "./AICommandBar";
+import { AIInsightList } from "./AIInsightCard";
 
 
 
@@ -621,6 +623,16 @@ export function Dashboard() {
               新建计时
             </button>
           </div>
+        </div>
+
+        {/* AI 命令栏 */}
+        <div className="mb-3">
+          <AICommandBar />
+        </div>
+
+        {/* AI 洞察卡片 */}
+        <div className="mb-3">
+          <AIInsightList />
         </div>
 
         {/* Bucket detection banner */}

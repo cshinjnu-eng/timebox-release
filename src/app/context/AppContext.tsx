@@ -23,10 +23,33 @@ import {
   getAllIdeaTasks,
   saveUserTag as saveUserTagDB,
   getAllUserTags,
+  saveAIConfig as saveAIConfigDB,
+  getAIConfig as getAIConfigDB,
+  saveAIInsight as saveAIInsightDB,
+  deleteAIInsight as deleteAIInsightDB,
+  getAllAIInsights,
   type EventRecord,
 } from "../services/db";
 import { downloadCSV } from "../services/exportCSV";
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import {
+  callAI,
+  testConnection,
+  collectSnapshot,
+  abortAIRequest,
+  type AIConfig,
+  type AIProvider,
+  type AIResponse,
+  PROVIDERS,
+} from "../services/ai";
+import {
+  buildTimeAnalysisMessages,
+  buildDailyReportMessages,
+  buildWeeklyReportMessages,
+  buildNLCommandMessages,
+  buildIdeaAssistMessages,
+  buildAutoInsightMessages,
+} from "../services/ai-prompts";
 
 const FloatingWindow = registerPlugin<any>("FloatingWindow");
 
@@ -222,6 +245,24 @@ export interface UserTag {
   lastUsed: string;
 }
 
+// ─── AI 配置与洞察 ───────────────────────────────────────────────────
+
+export interface AIConfigRecord {
+  id: "default";
+  provider: AIProvider;
+  apiKey: string;
+  model: string;
+  enableAutoInsights: boolean;
+}
+
+export interface AIInsight {
+  id: string;
+  type: "time_analysis" | "idea_suggestion" | "daily_report" | "weekly_report" | "auto";
+  content: string;
+  createdAt: string;
+  read: boolean;
+}
+
 // ─── 点子分类 → 计时分类映射 ──────────────────────────────────────────
 
 const IDEA_TO_TIMER_CATEGORY: Record<string, string> = {
@@ -322,6 +363,21 @@ interface AppContextType {
   setShowNewLongTaskDialog: (v: boolean) => void;
   taskToEnd: Task | null;
   setTaskToEnd: (t: Task | null) => void;
+  // ─── AI ─────────────────────────────────────────────
+  aiConfig: AIConfigRecord | null;
+  aiInsights: AIInsight[];
+  updateAIConfig: (config: Partial<AIConfigRecord>) => Promise<void>;
+  testAIConnection: () => Promise<{ ok: boolean; error?: string }>;
+  askAI: (prompt: string) => Promise<string>;
+  generateDailyReport: (targetDate?: Date) => Promise<void>;
+  generateWeeklyReport: () => Promise<void>;
+  analyzeTime: () => Promise<void>;
+  executeNLCommand: (input: string) => Promise<string>;
+  dismissInsight: (id: string) => void;
+  showAISettings: boolean;
+  setShowAISettings: (v: boolean) => void;
+  aiLoading: boolean;
+  cancelAI: () => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -530,6 +586,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [ideaTasks, setIdeaTasks] = useState<IdeaTask[]>([]);
   const [userTags, setUserTags] = useState<UserTag[]>([]);
 
+  // ─── AI state ─────────────────────────────────────────────────────
+  const [aiConfig, setAIConfig] = useState<AIConfigRecord | null>(null);
+  const [aiInsights, setAIInsights] = useState<AIInsight[]>([]);
+  const [showAISettings, setShowAISettings] = useState(false);
+  const [aiLoading, setAILoading] = useState(false);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Refs ──────────────────────────────────────────────────────────
@@ -551,6 +613,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   ideaTasksRef.current = ideaTasks;
   const userTagsRef = useRef<UserTag[]>([]);
   userTagsRef.current = userTags;
+  const aiConfigRef = useRef<AIConfigRecord | null>(null);
+  aiConfigRef.current = aiConfig;
+  const aiInsightsRef = useRef<AIInsight[]>([]);
+  aiInsightsRef.current = aiInsights;
 
   // ─── 前台切换时重触发桶检测 ──────────────────────────────────────
   useEffect(() => {
@@ -592,6 +658,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (msRecords.length > 0) setMilestones(msRecords as Milestone[]);
         if (itRecords.length > 0) setIdeaTasks(itRecords as IdeaTask[]);
         if (tagRecords.length > 0) setUserTags(tagRecords as UserTag[]);
+
+        // ─── 加载 AI 配置和洞察 ──────────────────────────────
+        const [aiCfg, insightRecords] = await Promise.all([
+          getAIConfigDB(),
+          getAllAIInsights(),
+        ]);
+        if (aiCfg) setAIConfig(aiCfg as AIConfigRecord);
+        if (insightRecords.length > 0) setAIInsights(insightRecords as AIInsight[]);
       } catch (err) {
         console.warn("IndexedDB 加载失败", err);
       } finally {
@@ -1339,6 +1413,195 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await clearAllDataDB();
     setTasks([]); setSessions([]); setTodos([]); setLongTasks([]); setAppBuckets([]);
     setIdeas([]); setMilestones([]); setIdeaTasks([]); setUserTags([]);
+    setAIInsights([]);
+  }, []);
+
+  // ─── AI Callbacks ──────────────────────────────────────────────────
+
+  const getAICallConfig = useCallback((): AIConfig | null => {
+    const cfg = aiConfigRef.current;
+    if (!cfg || !cfg.apiKey) return null;
+    return { provider: cfg.provider, apiKey: cfg.apiKey, model: cfg.model };
+  }, []);
+
+  const getDataSnapshot = useCallback((targetDate?: Date) => {
+    return collectSnapshot({
+      tasks: tasksRef.current,
+      sessions: sessionsRef.current,
+      ideas: ideasRef.current,
+      todos: [] as any[], // TodoItem doesn't have all fields; pass what we have
+      longTasks: longTasksRef.current,
+    }, targetDate);
+  }, []);
+
+  const updateAIConfigFn = useCallback(async (updates: Partial<AIConfigRecord>) => {
+    const current = aiConfigRef.current || {
+      id: "default" as const,
+      provider: "dashscope" as AIProvider,
+      apiKey: "",
+      model: "glm-5.1",
+      enableAutoInsights: false,
+    };
+    const merged = { ...current, ...updates, id: "default" as const };
+    setAIConfig(merged);
+    await saveAIConfigDB(merged).catch(console.warn);
+  }, []);
+
+  const testAIConnectionFn = useCallback(async () => {
+    const cfg = getAICallConfig();
+    if (!cfg) return { ok: false, error: "请先配置 API Key" };
+    return testConnection(cfg);
+  }, [getAICallConfig]);
+
+  const addInsight = useCallback(async (type: AIInsight["type"], content: string) => {
+    const insight: AIInsight = {
+      id: Math.random().toString(36).slice(2, 10),
+      type,
+      content,
+      createdAt: new Date().toISOString(),
+      read: false,
+    };
+    setAIInsights((prev) => [insight, ...prev]);
+    await saveAIInsightDB(insight).catch(console.warn);
+    return insight;
+  }, []);
+
+  const askAIFn = useCallback(async (prompt: string): Promise<string> => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先在设置中配置 AI API Key");
+    setAILoading(true);
+    try {
+      const res = await callAI(cfg, [{ role: "user", content: prompt }]);
+      return res.content;
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig]);
+
+  const analyzeTimeFn = useCallback(async () => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先配置 AI API Key");
+    setAILoading(true);
+    try {
+      const snapshot = getDataSnapshot();
+      const messages = buildTimeAnalysisMessages(snapshot);
+      const res = await callAI(cfg, messages, { maxTokens: 800 });
+      await addInsight("time_analysis", res.content);
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig, getDataSnapshot, addInsight]);
+
+  const generateDailyReportFn = useCallback(async (targetDate?: Date) => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先配置 AI API Key");
+    setAILoading(true);
+    try {
+      const snapshot = getDataSnapshot(targetDate);
+      const messages = buildDailyReportMessages(snapshot);
+      const res = await callAI(cfg, messages, { maxTokens: 1000 });
+      await addInsight("daily_report", res.content);
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig, getDataSnapshot, addInsight]);
+
+  const generateWeeklyReportFn = useCallback(async () => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先配置 AI API Key");
+    setAILoading(true);
+    try {
+      const snapshot = getDataSnapshot();
+      const messages = buildWeeklyReportMessages(snapshot);
+      const res = await callAI(cfg, messages, { maxTokens: 1200 });
+      await addInsight("weekly_report", res.content);
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig, getDataSnapshot, addInsight]);
+
+  const executeNLCommandFn = useCallback(async (input: string): Promise<string> => {
+    const cfg = getAICallConfig();
+    if (!cfg) throw new Error("请先配置 AI API Key");
+    setAILoading(true);
+    try {
+      const snapshot = getDataSnapshot();
+      const messages = buildNLCommandMessages(snapshot, input);
+      const res = await callAI(cfg, messages, { maxTokens: 500 });
+
+      // 尝试解析 JSON 操作指令
+      let parsed: any;
+      try {
+        // 去除可能的 markdown 代码块包裹
+        const cleaned = res.content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch {
+        return res.content; // 非 JSON，直接返回文本
+      }
+
+      const { action, data } = parsed;
+
+      if (action === "CREATE_TASK" && data) {
+        const cat = CATEGORIES.find((c) => c.name === data.category) || CATEGORIES[0];
+        addTask({
+          name: data.name || "AI 创建的任务",
+          category: cat.name,
+          tags: data.tags || [],
+          estimatedMinutes: data.estimatedMinutes,
+        });
+        return `已创建计时任务「${data.name}」(${cat.name})`;
+      }
+
+      if (action === "CREATE_IDEA" && data) {
+        captureIdea(data.title || "AI 创建的点子", data.description, data.category);
+        return `已创建点子「${data.title}」`;
+      }
+
+      if (action === "CREATE_TODO" && data) {
+        addTodo(data.text || "AI 创建的待办", data.category || "工作", data.priority || "medium");
+        return `已创建待办「${data.text}」`;
+      }
+
+      if (action === "GENERATE_REPORT") {
+        if (data?.type === "weekly") {
+          await generateWeeklyReportFn();
+          return "周报已生成，查看洞察卡片";
+        } else {
+          const daysAgo = typeof data?.daysAgo === "number" ? data.daysAgo : 0;
+          let targetDate: Date | undefined;
+          if (daysAgo > 0) {
+            const now = new Date();
+            targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysAgo);
+          }
+          await generateDailyReportFn(targetDate);
+          const label = daysAgo === 0 ? "今日" : daysAgo === 1 ? "昨日" : `${daysAgo}天前`;
+          return `${label}日报已生成，查看洞察卡片`;
+        }
+      }
+
+      if (action === "ANALYZE_TIME") {
+        await analyzeTimeFn();
+        return "时间分析已生成，查看洞察卡片";
+      }
+
+      if (action === "CHAT" && data?.reply) {
+        return data.reply;
+      }
+
+      return res.content;
+    } finally {
+      setAILoading(false);
+    }
+  }, [getAICallConfig, getDataSnapshot, addTask, captureIdea, addTodo, generateWeeklyReportFn, generateDailyReportFn, analyzeTimeFn]);
+
+  const dismissInsightFn = useCallback((id: string) => {
+    setAIInsights((prev) => prev.filter((i) => i.id !== id));
+    deleteAIInsightDB(id).catch(console.warn);
+  }, []);
+
+  const cancelAIFn = useCallback(() => {
+    abortAIRequest();
+    setAILoading(false);
   }, []);
 
   return (
@@ -1376,6 +1639,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       openManualWithPrefill: (prefill) => { setManualPrefill(prefill); setShowManualSessionDialog(true); },
       showNewLongTaskDialog, setShowNewLongTaskDialog,
       taskToEnd, setTaskToEnd,
+      // AI
+      aiConfig, aiInsights, updateAIConfig: updateAIConfigFn, testAIConnection: testAIConnectionFn,
+      askAI: askAIFn, generateDailyReport: generateDailyReportFn, generateWeeklyReport: generateWeeklyReportFn,
+      analyzeTime: analyzeTimeFn, executeNLCommand: executeNLCommandFn, dismissInsight: dismissInsightFn,
+      showAISettings, setShowAISettings, aiLoading, cancelAI: cancelAIFn,
     }}>
       {children}
     </AppContext.Provider>

@@ -18,6 +18,7 @@ import { NewLongTaskDialog } from "./NewLongTaskDialog";
 import { EndTaskDialog } from "./EndTaskDialog";
 import { ManualSessionDialog } from "./ManualSessionDialog";
 import { GuideModal } from "./GuideModal";
+import { AISettings } from "./AISettings";
 
 const navItems = [
   { to: "/", label: "计时", icon: LayoutDashboard },
@@ -48,6 +49,7 @@ export function Layout() {
     showNewLongTaskDialog,
     taskToEnd,
     exportToCSV,
+    showAISettings,
   } = useApp();
   const [showGuide, setShowGuide] = useState(false);
 
@@ -216,6 +218,7 @@ export function Layout() {
       {showEndTaskDialog && taskToEnd && <EndTaskDialog />}
       {showManualSessionDialog && <ManualSessionDialog />}
       {showGuide && <GuideModal onClose={() => setShowGuide(false)} />}
+      {showAISettings && <AISettings />}
 
     </div>
   );
