@@ -122,41 +122,44 @@ function TimelineBlock({
   );
 }
 
-// ─── Screen usage session block (for the right column) ───────────────
-function ScreenBlock({
-  top, height, color, appName, duration,
+// ─── Thin column block (screen usage OR bucket sessions) ─────────────
+function ThinBlock({
+  top, height, color, label, sublabel, alignRight = false,
 }: {
-  top: number; height: number; color: string; appName: string; duration: string;
+  top: number; height: number; color: string; label: string; sublabel: string; alignRight?: boolean;
 }) {
-  const [hovered, setHovered] = useState(false);
+  const [tapped, setTapped] = useState(false);
+  const renderedH = Math.max(height, 4);
   return (
     <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onClick={() => setTapped((v) => !v)}
       className="absolute w-full rounded-sm"
       style={{
         top,
-        height: Math.max(height, 3),
+        height: renderedH,
         background: color,
-        opacity: hovered ? 0.95 : 0.65,
-        zIndex: hovered ? 10 : 1,
-        cursor: "default",
+        opacity: tapped ? 0.95 : 0.65,
+        zIndex: tapped ? 10 : 1,
+        cursor: "pointer",
         transition: "opacity 0.15s",
       }}
     >
-      {hovered && (
+      {tapped && (
         <div
-          className="absolute z-20 rounded-lg p-2 pointer-events-none whitespace-nowrap"
+          className="absolute z-20 rounded-lg p-2 whitespace-nowrap"
           style={{
-            bottom: "calc(100% + 4px)",
-            right: 0,
+            bottom: renderedH >= 60 ? undefined : "calc(100% + 4px)",
+            top: renderedH >= 60 ? 0 : undefined,
+            right: alignRight ? 0 : undefined,
+            left: alignRight ? undefined : 0,
             background: "#1A1D29",
             border: `1px solid ${color}66`,
             boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
           }}
+          onClick={(e) => e.stopPropagation()}
         >
-          <p style={{ fontSize: 11, fontWeight: 600, color: "#E8EAF0" }}>{appName}</p>
-          <p style={{ fontSize: 10, color, fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)" }}>{duration}</p>
+          <p style={{ fontSize: 11, fontWeight: 600, color: "#E8EAF0" }}>{label}</p>
+          <p style={{ fontSize: 10, color }}>{sublabel}</p>
         </div>
       )}
     </div>
@@ -226,57 +229,86 @@ export function Timeline() {
     });
   }, [sessions, targetDate, selectedCategory]);
 
+  // 普通记录 vs 桶补录
+  const normalSessions = useMemo(() =>
+    filteredSessions.filter((s) => !s.tags?.includes("_bucket")),
+    [filteredSessions]);
+  const bucketSessions = useMemo(() =>
+    filteredSessions.filter((s) => s.tags?.includes("_bucket")),
+    [filteredSessions]);
+
+  const MIN_BLOCK_H = 28; // 渲染最小高度
+
   type BlockData = {
     session: typeof sessions[0];
     top: number; height: number; overlapIndex: number; overlap: number;
   };
 
   const blocks: BlockData[] = useMemo(() => {
-    const sorted = [...filteredSessions].sort(
+    const sorted = [...normalSessions].sort(
       (a, b) => a.startTime.getTime() - b.startTime.getTime()
     );
     const results: BlockData[] = sorted.map((s) => {
       const startFrac = s.startTime.getHours() + s.startTime.getMinutes() / 60 - START_HOUR;
       const endFrac = s.endTime.getHours() + s.endTime.getMinutes() / 60 - START_HOUR;
       const top = Math.max(0, startFrac) * HOUR_HEIGHT;
-      const height = Math.max(0, endFrac - Math.max(0, startFrac)) * HOUR_HEIGHT;
+      const rawH = Math.max(0, endFrac - Math.max(0, startFrac)) * HOUR_HEIGHT;
+      const height = Math.max(rawH, MIN_BLOCK_H); // 用渲染高度做碰撞检测
       return { session: s, top, height, overlapIndex: 0, overlap: 1 };
     });
 
+    // 贪心分列：用渲染高度判断是否空闲
     const columnEnds: number[] = [];
-    for (let i = 0; i < results.length; i++) {
-      const block = results[i];
+    for (const block of results) {
       let assignedCol = -1;
       for (let col = 0; col < columnEnds.length; col++) {
-        if (columnEnds[col] < block.top) {
+        if (columnEnds[col] <= block.top) {
           assignedCol = col;
           break;
         }
       }
       if (assignedCol === -1) {
         assignedCol = columnEnds.length;
-        columnEnds.push(block.top + block.height);
-      } else {
-        columnEnds[assignedCol] = block.top + block.height;
+        columnEnds.push(0);
       }
+      columnEnds[assignedCol] = block.top + block.height;
       block.overlapIndex = assignedCol;
     }
 
+    // 计算每个 block 在其时间段内最大并发列数
     for (let i = 0; i < results.length; i++) {
-      let maxCols = results[i].overlapIndex + 1;
+      let maxCols = 1;
+      const a = results[i];
       for (let j = 0; j < results.length; j++) {
         if (i === j) continue;
-        const a = results[i];
         const b = results[j];
-        if (b.top < a.top + a.height + 1 && b.top + b.height + 1 > a.top) {
+        // 用渲染高度判断是否视觉重叠
+        if (b.top < a.top + a.height && b.top + b.height > a.top) {
           maxCols = Math.max(maxCols, b.overlapIndex + 1);
         }
       }
-      results[i].overlap = maxCols;
+      results[i].overlap = Math.max(maxCols, a.overlapIndex + 1);
     }
 
     return results;
-  }, [filteredSessions]);
+  }, [normalSessions]);
+
+  // ─── Bucket session blocks (separate column) ──────────────────────
+  const bucketBlocks = useMemo(() => {
+    return bucketSessions.map((s) => {
+      const startFrac = s.startTime.getHours() + s.startTime.getMinutes() / 60 - START_HOUR;
+      const endFrac = s.endTime.getHours() + s.endTime.getMinutes() / 60 - START_HOUR;
+      const top = Math.max(0, startFrac) * HOUR_HEIGHT;
+      const height = Math.max(0, endFrac - Math.max(0, startFrac)) * HOUR_HEIGHT;
+      const startStr = s.startTime.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      const endStr = s.endTime.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      return {
+        top, height, color: s.color,
+        label: s.taskName,
+        sublabel: `${startStr}–${endStr} · ${formatDuration(s.duration)}`,
+      };
+    });
+  }, [bucketSessions]);
 
   // ─── Screen usage blocks for the right column ─────────────────────
   const screenBlocks = useMemo(() => {
@@ -291,7 +323,7 @@ export function Timeline() {
     }).filter((b) => b.height >= 1 && b.top >= 0 && b.top <= TOTAL_HOURS * HOUR_HEIGHT);
   }, [usageSessions, dayStart]);
 
-  const totalTime = filteredSessions
+  const totalTime = normalSessions
     .filter((s) => s.category === "工作" || s.category === "学习")
     .reduce((s, sess) => s + sess.duration, 0);
   const totalHours = Math.floor(totalTime / 3600);
@@ -304,6 +336,8 @@ export function Timeline() {
   const showNowLine = isToday && nowFrac >= 0 && nowFrac <= TOTAL_HOURS;
 
   const SCREEN_COL_WIDTH = 52; // px
+  const BUCKET_COL_WIDTH = 36; // px — 桶会话列宽
+  const hasBucketCol = bucketBlocks.length > 0;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -381,7 +415,7 @@ export function Timeline() {
         >
           {/* Stats bar */}
           <div
-            className="flex items-center gap-6 px-5 py-3"
+            className="flex items-center gap-6 px-5 py-3 flex-wrap"
             style={{ borderBottom: "1px solid #252836" }}
           >
             <div className="flex items-center gap-2">
@@ -395,9 +429,18 @@ export function Timeline() {
               <Layers size={13} style={{ color: "#A855F7" }} />
               <span style={{ fontSize: 12, color: "#8B8FA8" }}>记录数</span>
               <span className="tb-mono" style={{ fontSize: 14, fontWeight: 700, color: "#A855F7" }}>
-                {filteredSessions.length}
+                {normalSessions.length}
               </span>
             </div>
+            {hasBucketCol && (
+              <div className="flex items-center gap-2">
+                <Layers size={13} style={{ color: "#F59E0B" }} />
+                <span style={{ fontSize: 12, color: "#8B8FA8" }}>应用桶</span>
+                <span className="tb-mono" style={{ fontSize: 14, fontWeight: 700, color: "#F59E0B" }}>
+                  {bucketBlocks.length}
+                </span>
+              </div>
+            )}
             {hasUsagePerm && screenBlocks.length > 0 && (
               <div className="flex items-center gap-2">
                 <Smartphone size={13} style={{ color: "#06B6D4" }} />
@@ -412,23 +455,35 @@ export function Timeline() {
           {/* Column headers */}
           <div
             className="flex"
-            style={{ paddingLeft: 52, paddingRight: hasUsagePerm ? SCREEN_COL_WIDTH + 8 + 16 : 16, paddingTop: 6, paddingBottom: 0 }}
+            style={{
+              paddingLeft: 52,
+              paddingRight: hasUsagePerm ? SCREEN_COL_WIDTH + 8 + 16 : 16,
+              paddingTop: 6, paddingBottom: 0,
+            }}
           >
             <div className="flex-1" style={{ fontSize: 11, color: "#525675", fontWeight: 600 }}>
               任务记录
             </div>
+            {hasBucketCol && (
+              <div
+                style={{
+                  width: BUCKET_COL_WIDTH,
+                  fontSize: 10, color: "#F59E0B", fontWeight: 600,
+                  textAlign: "center", display: "flex", alignItems: "center",
+                  justifyContent: "center", gap: 2, marginRight: 8,
+                }}
+              >
+                <Layers size={9} />
+                桶
+              </div>
+            )}
             {hasUsagePerm && (
               <div
                 style={{
                   width: SCREEN_COL_WIDTH,
-                  fontSize: 10,
-                  color: "#06B6D4",
-                  fontWeight: 600,
-                  textAlign: "center",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 3,
+                  fontSize: 10, color: "#06B6D4", fontWeight: 600,
+                  textAlign: "center", display: "flex", alignItems: "center",
+                  justifyContent: "center", gap: 3,
                 }}
               >
                 <Smartphone size={10} />
@@ -521,7 +576,7 @@ export function Timeline() {
                 );
               })}
 
-              {filteredSessions.length === 0 && (
+              {normalSessions.length === 0 && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ color: "#8B8FA8" }}>
                   <GitBranch size={32} style={{ marginBottom: 10, opacity: 0.25, filter: "drop-shadow(0 0 8px rgba(168, 85, 247, 0.15))" }} />
                   <p style={{ fontSize: 13 }}>该时段暂无工作记录</p>
@@ -529,65 +584,57 @@ export function Timeline() {
               )}
             </div>
 
+            {/* ── Bucket sessions column ──────────────────────── */}
+            {hasBucketCol && (
+              <div
+                className="relative flex-shrink-0"
+                style={{ width: BUCKET_COL_WIDTH, height: TOTAL_HOURS * HOUR_HEIGHT + 8, marginTop: 8, marginRight: 8 }}
+              >
+                {Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => (
+                  <div key={i} className="absolute left-0 right-0"
+                    style={{ top: i * HOUR_HEIGHT, height: 1, background: "#1E2130" }} />
+                ))}
+                <div className="absolute top-0 bottom-0"
+                  style={{ left: -4, width: 1, background: "#252836" }} />
+                {showNowLine && (
+                  <div className="absolute left-0 right-0 z-20 pointer-events-none"
+                    style={{ top: nowLineTop, height: 1.5, background: "#EF444444" }} />
+                )}
+                {bucketBlocks.map((b, i) => (
+                  <ThinBlock key={i} top={b.top} height={b.height}
+                    color={b.color} label={b.label} sublabel={b.sublabel} alignRight />
+                ))}
+              </div>
+            )}
+
             {/* ── Screen usage column ─────────────────────────── */}
             {hasUsagePerm && (
               <div
                 className="relative flex-shrink-0"
-                style={{
-                  width: SCREEN_COL_WIDTH,
-                  height: TOTAL_HOURS * HOUR_HEIGHT + 8,
-                  marginTop: 8,
-                  marginRight: 16,
-                }}
+                style={{ width: SCREEN_COL_WIDTH, height: TOTAL_HOURS * HOUR_HEIGHT + 8, marginTop: 8, marginRight: 16 }}
               >
-                {/* Same grid lines */}
                 {Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => (
-                  <div
-                    key={i}
-                    className="absolute left-0 right-0"
-                    style={{ top: i * HOUR_HEIGHT, height: 1, background: "#1E2130" }}
-                  />
+                  <div key={i} className="absolute left-0 right-0"
+                    style={{ top: i * HOUR_HEIGHT, height: 1, background: "#1E2130" }} />
                 ))}
                 {Array.from({ length: TOTAL_HOURS }, (_, i) => (
-                  <div
-                    key={`h${i}`}
-                    className="absolute left-0 right-0"
-                    style={{ top: i * HOUR_HEIGHT + HOUR_HEIGHT / 2, height: 1, background: "#181B28" }}
-                  />
+                  <div key={`h${i}`} className="absolute left-0 right-0"
+                    style={{ top: i * HOUR_HEIGHT + HOUR_HEIGHT / 2, height: 1, background: "#181B28" }} />
                 ))}
-
-                {/* Vertical separator */}
-                <div
-                  className="absolute top-0 bottom-0"
-                  style={{ left: -5, width: 1, background: "#252836" }}
-                />
-
-                {/* Now line continuation */}
+                <div className="absolute top-0 bottom-0"
+                  style={{ left: -5, width: 1, background: "#252836" }} />
                 {showNowLine && (
-                  <div
-                    className="absolute left-0 right-0 z-20 pointer-events-none"
-                    style={{ top: nowLineTop, height: 1.5, background: "#EF444444" }}
-                  />
+                  <div className="absolute left-0 right-0 z-20 pointer-events-none"
+                    style={{ top: nowLineTop, height: 1.5, background: "#EF444444" }} />
                 )}
-
-                {/* Screen usage blocks */}
                 {screenBlocks.length === 0 ? (
-                  <div
-                    className="absolute inset-0 flex items-center justify-center"
-                    style={{ opacity: 0.3 }}
-                  >
+                  <div className="absolute inset-0 flex items-center justify-center" style={{ opacity: 0.3 }}>
                     <Smartphone size={16} style={{ color: "#525675" }} />
                   </div>
                 ) : (
                   screenBlocks.map((b, i) => (
-                    <ScreenBlock
-                      key={i}
-                      top={b.top}
-                      height={b.height}
-                      color={b.color}
-                      appName={b.appName}
-                      duration={b.duration}
-                    />
+                    <ThinBlock key={i} top={b.top} height={b.height}
+                      color={b.color} label={b.appName} sublabel={b.duration} />
                   ))
                 )}
               </div>
@@ -629,7 +676,7 @@ export function Timeline() {
                   </div>
                 );
               })}
-              {filteredSessions.length === 0 && (
+              {normalSessions.length === 0 && (
                 <p style={{ fontSize: 12, color: "#525675" }}>暂无数据</p>
               )}
             </div>
@@ -638,10 +685,10 @@ export function Timeline() {
           <div className="rounded-xl p-4" style={{ background: "#161820", border: "1px solid #252836" }}>
             <h3 style={{ fontSize: 13, fontWeight: 600, color: "#E8EAF0", marginBottom: 10 }}>记录列表</h3>
             <div className="flex flex-col gap-2">
-              {filteredSessions.length === 0 ? (
+              {normalSessions.length === 0 ? (
                 <p style={{ fontSize: 12, color: "#525675" }}>暂无记录</p>
               ) : (
-                filteredSessions
+                normalSessions
                   .slice()
                   .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
                   .map((s) => {

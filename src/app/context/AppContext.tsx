@@ -1082,7 +1082,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       evalTag: det.evalTag, color: det.color,
       startTime: new Date(seg.start), endTime: new Date(seg.end),
       duration: Math.round((seg.end - seg.start) / 1000),
-      tags: [],
+      tags: ["_bucket"],
     }));
     setSessions((prev) => [...newSessions, ...prev]);
     newSessions.forEach(s => saveEvent(sessionToEvent(s)).catch(console.warn));
