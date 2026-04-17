@@ -1,7 +1,11 @@
-import { useState, useRef } from "react";
-import { Zap, Send, Loader2, FileText, BarChart3, Lightbulb, X, ChevronUp, ChevronDown, Calendar, Square } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import {
+  Zap, Send, Loader2, FileText, BarChart3, X,
+  ChevronUp, ChevronDown, Calendar, Square, Plus, Bot, User,
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp } from "../context/AppContext";
+import type { AIMessage } from "../services/ai";
 
 function getRecentDays(): { label: string; date: Date }[] {
   const days: { label: string; date: Date }[] = [];
@@ -14,42 +18,84 @@ function getRecentDays(): { label: string; date: Date }[] {
   return days;
 }
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  isAction?: boolean; // true = 执行了操作（绿色），false = 普通回复
+}
+
 export function AICommandBar() {
-  const { executeNLCommand, generateDailyReport, generateWeeklyReport, analyzeTime, aiConfig, aiLoading, setShowAISettings, cancelAI } = useApp();
+  const {
+    executeNLCommand, generateDailyReport, generateWeeklyReport, analyzeTime,
+    aiConfig, aiLoading, setShowAISettings, cancelAI,
+    conversationHistory, clearConversation,
+  } = useApp();
+
   const [expanded, setExpanded] = useState(false);
   const [input, setInput] = useState("");
-  const [response, setResponse] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  // 本地展示用的消息列表（含用户和 AI 双方）
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  // 传给 AI 的多轮历史（只含 user/assistant role 的原始格式）
+  const [history, setHistory] = useState<AIMessage[]>([]);
+
   const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   const isConfigured = aiConfig && aiConfig.apiKey;
 
+  // 自动滚到底部
+  useEffect(() => {
+    if (expanded) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, expanded]);
+
+  function handleNewSession() {
+    setChatMessages([]);
+    setHistory([]);
+    clearConversation();
+    setError(null);
+    setInput("");
+  }
+
   async function handleSubmit() {
     if (!input.trim() || aiLoading) return;
+    const userText = input.trim();
+    setInput("");
     setError(null);
-    setResponse(null);
+
+    // 立即展示用户消息
+    setChatMessages((prev) => [...prev, { role: "user", content: userText }]);
+
     try {
-      const result = await executeNLCommand(input.trim());
-      setResponse(result);
-      setInput("");
+      const result = await executeNLCommand(userText, history);
+      const isAction = !result.startsWith("我") && (
+        result.includes("已创建") || result.includes("已补录") || result.includes("已生成") ||
+        result.includes("日报") || result.includes("周报") || result.includes("分析")
+      );
+      setChatMessages((prev) => [...prev, { role: "assistant", content: result, isAction }]);
+      // 追加到多轮历史
+      setHistory((prev) => [
+        ...prev,
+        { role: "user", content: userText },
+        { role: "assistant", content: result },
+      ]);
     } catch (e: any) {
-      setError(e.message || "操作失败");
+      const errMsg = e.message || "操作失败";
+      setError(errMsg);
+      setChatMessages((prev) => [...prev, { role: "assistant", content: errMsg, isAction: false }]);
     }
   }
 
   async function handleDailyReport(targetDate?: Date) {
     setError(null);
-    setResponse(null);
     setShowDatePicker(false);
     try {
       await generateDailyReport(targetDate);
-      if (targetDate) {
-        const label = targetDate.toLocaleDateString("zh-CN", { month: "long", day: "numeric" });
-        setResponse(`${label} 日报已生成`);
-      } else {
-        setResponse("今日日报已生成");
-      }
+      const label = targetDate
+        ? targetDate.toLocaleDateString("zh-CN", { month: "long", day: "numeric" })
+        : "今日";
+      setChatMessages((prev) => [...prev, { role: "assistant", content: `${label}日报已生成，查看洞察卡片`, isAction: true }]);
     } catch (e: any) {
       setError(e.message || "操作失败");
     }
@@ -57,14 +103,13 @@ export function AICommandBar() {
 
   async function handleQuickAction(action: "weekly" | "analyze") {
     setError(null);
-    setResponse(null);
     try {
       if (action === "weekly") {
         await generateWeeklyReport();
-        setResponse("周报已生成");
+        setChatMessages((prev) => [...prev, { role: "assistant", content: "周报已生成，查看洞察卡片", isAction: true }]);
       } else {
         await analyzeTime();
-        setResponse("时间分析已生成");
+        setChatMessages((prev) => [...prev, { role: "assistant", content: "时间分析已生成，查看洞察卡片", isAction: true }]);
       }
     } catch (e: any) {
       setError(e.message || "操作失败");
@@ -90,6 +135,7 @@ export function AICommandBar() {
   }
 
   const recentDays = getRecentDays();
+  const hasHistory = chatMessages.length > 0;
 
   return (
     <div
@@ -100,7 +146,7 @@ export function AICommandBar() {
         boxShadow: expanded ? "0 4px 16px rgba(245,158,11,0.06)" : "none",
       }}
     >
-      {/* 收起状态：一行提示 */}
+      {/* 顶栏 */}
       <div className="w-full flex items-center gap-2 px-3 py-2.5">
         <button
           onClick={() => {
@@ -113,14 +159,14 @@ export function AICommandBar() {
           className="flex items-center gap-2 flex-1 min-w-0"
         >
           <Zap size={14} style={{ color: "#F59E0B", filter: "drop-shadow(0 0 3px rgba(245,158,11,0.3))" }} />
-          <span style={{ fontSize: 12, color: "#8B8FA8" }}>
-            {aiLoading ? "AI 处理中..." : "对我说点什么..."}
+          <span style={{ fontSize: 12, color: "#8B8FA8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {aiLoading ? "AI 思考中..." : hasHistory ? `对话中 · ${chatMessages.length} 条消息` : "对我说点什么..."}
           </span>
         </button>
         {aiLoading ? (
           <button
             onClick={(e) => { e.stopPropagation(); cancelAI(); setError("已手动停止"); }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md flex-shrink-0"
             style={{
               background: "rgba(239,68,68,0.12)",
               border: "1px solid rgba(239,68,68,0.25)",
@@ -140,16 +186,14 @@ export function AICommandBar() {
               if (!expanded) setTimeout(() => inputRef.current?.focus(), 100);
             }}
           >
-            {expanded ? (
-              <ChevronUp size={12} style={{ color: "#525675" }} />
-            ) : (
-              <ChevronDown size={12} style={{ color: "#525675" }} />
-            )}
+            {expanded
+              ? <ChevronUp size={12} style={{ color: "#525675" }} />
+              : <ChevronDown size={12} style={{ color: "#525675" }} />}
           </button>
         )}
       </div>
 
-      {/* 展开状态 */}
+      {/* 展开内容 */}
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -160,6 +204,82 @@ export function AICommandBar() {
             className="overflow-hidden"
           >
             <div className="px-3 pb-3">
+
+              {/* 对话历史 */}
+              {hasHistory && (
+                <div
+                  className="flex flex-col gap-2 mb-3 overflow-y-auto"
+                  style={{ maxHeight: 240, paddingRight: 2 }}
+                >
+                  {chatMessages.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={`flex gap-2 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
+                    >
+                      {/* 头像 */}
+                      <div
+                        className="flex items-center justify-center rounded-full flex-shrink-0"
+                        style={{
+                          width: 22, height: 22,
+                          background: msg.role === "user" ? "rgba(79,127,255,0.2)" : "rgba(245,158,11,0.15)",
+                          marginTop: 2,
+                        }}
+                      >
+                        {msg.role === "user"
+                          ? <User size={11} style={{ color: "#4F7FFF" }} />
+                          : <Bot size={11} style={{ color: "#F59E0B" }} />}
+                      </div>
+                      {/* 气泡 */}
+                      <div
+                        className="px-3 py-2 rounded-xl"
+                        style={{
+                          maxWidth: "78%",
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          background: msg.role === "user"
+                            ? "rgba(79,127,255,0.12)"
+                            : msg.isAction
+                              ? "rgba(16,185,129,0.08)"
+                              : "#1A1D29",
+                          color: msg.role === "user"
+                            ? "#A5BFFF"
+                            : msg.isAction ? "#10B981" : "#C8CAD8",
+                          border: `1px solid ${
+                            msg.role === "user"
+                              ? "rgba(79,127,255,0.2)"
+                              : msg.isAction
+                                ? "rgba(16,185,129,0.15)"
+                                : "#252836"
+                          }`,
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={bottomRef} />
+                </div>
+              )}
+
+              {/* 错误（非聊天错误，如超时） */}
+              <AnimatePresence>
+                {error && !chatMessages.some(m => m.content === error) && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="flex items-start gap-2 px-3 py-2 rounded-lg mb-2"
+                    style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}
+                  >
+                    <p style={{ fontSize: 12, color: "#EF4444", lineHeight: 1.5, flex: 1 }}>{error}</p>
+                    <button onClick={() => setError(null)} style={{ color: "#525675", flexShrink: 0 }}>
+                      <X size={10} />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               {/* 输入框 */}
               <div className="flex items-center gap-2 mb-2.5">
                 <input
@@ -167,7 +287,7 @@ export function AICommandBar() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
-                  placeholder="例如：帮我建一个30分钟的论文写作任务"
+                  placeholder={hasHistory ? "继续对话..." : "例如：昨晚9点到11点看论文"}
                   disabled={aiLoading}
                   className="flex-1 rounded-lg px-3 py-2 outline-none"
                   style={{
@@ -182,8 +302,7 @@ export function AICommandBar() {
                   disabled={!input.trim() || aiLoading}
                   className="flex items-center justify-center rounded-lg"
                   style={{
-                    width: 36,
-                    height: 36,
+                    width: 36, height: 36,
                     background: input.trim() ? "rgba(245,158,11,0.15)" : "#1A1D29",
                     color: input.trim() ? "#F59E0B" : "#525675",
                   }}
@@ -193,8 +312,7 @@ export function AICommandBar() {
               </div>
 
               {/* 快捷操作 */}
-              <div className="flex gap-2 mb-2 flex-wrap">
-                {/* 日报按钮 — 点击展开日期选择 */}
+              <div className="flex gap-2 flex-wrap mb-2">
                 <button
                   onClick={() => setShowDatePicker(!showDatePicker)}
                   disabled={aiLoading}
@@ -235,14 +353,25 @@ export function AICommandBar() {
                   <BarChart3 size={10} />
                   分析
                 </button>
+                {hasHistory && (
+                  <button
+                    onClick={handleNewSession}
+                    disabled={aiLoading}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs"
+                    style={{
+                      background: "rgba(245,158,11,0.06)",
+                      border: "1px solid rgba(245,158,11,0.15)",
+                      color: "#F59E0B",
+                    }}
+                  >
+                    <Plus size={10} />
+                    新会话
+                  </button>
+                )}
                 <button
                   onClick={() => setShowAISettings(true)}
                   className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs ml-auto"
-                  style={{
-                    background: "#1A1D29",
-                    border: "1px solid #252836",
-                    color: "#525675",
-                  }}
+                  style={{ background: "#1A1D29", border: "1px solid #252836", color: "#525675" }}
                 >
                   <Zap size={10} />
                   设置
@@ -257,14 +386,14 @@ export function AICommandBar() {
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.15 }}
-                    className="overflow-hidden mb-2"
+                    className="overflow-hidden"
                   >
                     <div
-                      className="flex gap-1.5 flex-wrap px-1 py-2 rounded-lg"
+                      className="flex gap-1.5 flex-wrap px-1 py-2 rounded-lg mb-2"
                       style={{ background: "rgba(79,127,255,0.04)", border: "1px solid rgba(79,127,255,0.1)" }}
                     >
                       <span style={{ fontSize: 11, color: "#525675", width: "100%", paddingLeft: 4, marginBottom: 2 }}>
-                        选择日期生成日报：
+                        选择日期：
                       </span>
                       {recentDays.map(({ label, date }) => (
                         <button
@@ -287,38 +416,6 @@ export function AICommandBar() {
                 )}
               </AnimatePresence>
 
-              {/* 响应/错误 */}
-              <AnimatePresence>
-                {response && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-start gap-2 px-3 py-2 rounded-lg"
-                    style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.12)" }}
-                  >
-                    <Lightbulb size={12} style={{ color: "#10B981", marginTop: 2, flexShrink: 0 }} />
-                    <p style={{ fontSize: 12, color: "#E8EAF0", lineHeight: 1.5, flex: 1 }}>{response}</p>
-                    <button onClick={() => setResponse(null)} style={{ color: "#525675", flexShrink: 0 }}>
-                      <X size={10} />
-                    </button>
-                  </motion.div>
-                )}
-                {error && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-start gap-2 px-3 py-2 rounded-lg"
-                    style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.12)" }}
-                  >
-                    <p style={{ fontSize: 12, color: "#EF4444", lineHeight: 1.5, flex: 1 }}>{error}</p>
-                    <button onClick={() => setError(null)} style={{ color: "#525675", flexShrink: 0 }}>
-                      <X size={10} />
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
           </motion.div>
         )}

@@ -378,6 +378,8 @@ interface AppContextType {
   setShowAISettings: (v: boolean) => void;
   aiLoading: boolean;
   cancelAI: () => void;
+  conversationHistory: AIMessage[];
+  clearConversation: () => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -591,6 +593,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [aiInsights, setAIInsights] = useState<AIInsight[]>([]);
   const [showAISettings, setShowAISettings] = useState(false);
   const [aiLoading, setAILoading] = useState(false);
+  const [conversationHistory, setConversationHistory] = useState<AIMessage[]>([]);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1520,14 +1523,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getAICallConfig, getDataSnapshot, addInsight]);
 
-  const executeNLCommandFn = useCallback(async (input: string): Promise<string> => {
+  const executeNLCommandFn = useCallback(async (input: string, history: AIMessage[] = []): Promise<string> => {
     const cfg = getAICallConfig();
     if (!cfg) throw new Error("请先配置 AI API Key");
     setAILoading(true);
     try {
       const snapshot = getDataSnapshot();
-      const messages = buildNLCommandMessages(snapshot, input);
-      const res = await callAI(cfg, messages, { maxTokens: 500 });
+      // 构建带历史的消息列表：system + history + 本次 user
+      const baseMessages = buildNLCommandMessages(snapshot, input);
+      const systemMsg = baseMessages[0];
+      const userMsg = baseMessages[1];
+      const messages: AIMessage[] = history.length > 0
+        ? [systemMsg, ...history, userMsg]
+        : baseMessages;
+      const res = await callAI(cfg, messages, { maxTokens: 600 });
 
       // 尝试解析 JSON 操作指令
       let parsed: any;
@@ -1667,6 +1676,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       askAI: askAIFn, generateDailyReport: generateDailyReportFn, generateWeeklyReport: generateWeeklyReportFn,
       analyzeTime: analyzeTimeFn, executeNLCommand: executeNLCommandFn, dismissInsight: dismissInsightFn,
       showAISettings, setShowAISettings, aiLoading, cancelAI: cancelAIFn,
+      conversationHistory, clearConversation: () => setConversationHistory([]),
     }}>
       {children}
     </AppContext.Provider>

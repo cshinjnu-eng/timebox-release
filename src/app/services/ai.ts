@@ -55,21 +55,22 @@ export interface AIConfig {
   model: string;
 }
 
-// ─── 全局 AbortController（用于取消进行中的请求） ────────────────────
+// ─── AbortController 管理 ────────────────────────────────────────────
 
-let currentAbortController: AbortController | null = null;
+// 用 Symbol 标记每次调用，避免并发时互相取消
+let activeController: AbortController | null = null;
 
-/** 取消当前正在进行的 AI 请求 */
+/** 手动取消当前进行中的 AI 请求（仅由用户点击停止时调用）*/
 export function abortAIRequest() {
-  if (currentAbortController) {
-    currentAbortController.abort();
-    currentAbortController = null;
+  if (activeController) {
+    activeController.abort("manual");
+    activeController = null;
   }
 }
 
 // ─── 统一调用 ─────────────────────────────────────────────────────────
 
-const AI_TIMEOUT_MS = 30_000; // 30 秒超时
+const AI_TIMEOUT_MS = 60_000; // 60 秒超时
 
 export async function callAI(
   config: AIConfig,
@@ -81,7 +82,6 @@ export async function callAI(
 
   const url = `${providerConfig.baseURL}/chat/completions`;
 
-  // 是否为 Qwen3 系列模型（默认开启 thinking，需要显式关闭以加速）
   const isQwen3 = config.model.startsWith("qwen3");
   const enableThinking = options?.enableThinking ?? false;
 
@@ -105,15 +105,11 @@ export async function callAI(
     body.max_tokens = options.maxTokens;
   }
 
-  // 取消上一个请求（如果还在跑）
-  abortAIRequest();
-
-  // 创建新的 AbortController
+  // 每次创建独立的 controller，不自动取消上一个
   const controller = new AbortController();
-  currentAbortController = controller;
+  activeController = controller;
 
-  // 超时自动 abort
-  const timeoutId = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort("timeout"), AI_TIMEOUT_MS);
 
   try {
     const res = await fetch(url, {
@@ -135,7 +131,6 @@ export async function callAI(
 
     const json = await res.json();
 
-    // OpenAI 兼容格式解析
     const choice = json.choices?.[0];
     if (!choice) throw new Error("AI 返回为空");
 
@@ -154,12 +149,13 @@ export async function callAI(
   } catch (e: any) {
     clearTimeout(timeoutId);
     if (e.name === "AbortError") {
-      throw new Error("请求已取消（超时或手动停止）");
+      const reason = e.message || "";
+      throw new Error(reason === "timeout" ? "请求超时（60秒），请稍后重试" : "已手动停止");
     }
     throw e;
   } finally {
-    if (currentAbortController === controller) {
-      currentAbortController = null;
+    if (activeController === controller) {
+      activeController = null;
     }
   }
 }
